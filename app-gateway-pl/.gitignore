@@ -1,0 +1,6 @@
+.env
+.venv/
+__pycache__/
+infra/.params-resolved.json
+infra/main.json
+azure-resources.json

@@ -1,0 +1,13 @@
+[project]
+name = "aurabc-appgw-pytest"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "neo4j",
+    "python-dotenv",
+    "requests",
+    "pytest",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["."]

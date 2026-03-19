@@ -1,0 +1,9 @@
+.env
+.env.vm
+.venv/
+__pycache__/
+infra/.params-resolved.json
+infra/main.json
+deployment-outputs.json
+test-vm-outputs.json
+test-output.log
