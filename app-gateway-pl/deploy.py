@@ -30,7 +30,7 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RESOURCE_GROUP = os.getenv("AZURE_RESOURCE_GROUP", "aurabc-appgw-poc-rg")
-LOCATION = os.getenv("AZURE_LOCATION", "westus3")
+LOCATION = os.getenv("AZURE_LOCATION", "eastus")
 PREFIX = os.getenv("AZURE_PREFIX", "aurabc-appgw")
 RESOURCES_FILE = os.path.join(BASE_DIR, "azure-resources.json")
 
@@ -352,7 +352,7 @@ def cmd_create_ncc():
     token = get_databricks_token(profile)
 
     ncc_name = f"{PREFIX}-ncc"
-    region = LOCATION
+    region = os.getenv("NCC_REGION", "") or LOCATION
 
     print(f"\n  Account ID: {account_id}")
     print(f"  NCC name:   {ncc_name}")
@@ -394,7 +394,7 @@ def cmd_create_pe_rule():
 
     account_id = require_env("DATABRICKS_ACCOUNT_ID", "Set DATABRICKS_ACCOUNT_ID in .env")
     ncc_id = require_env("NCC_ID", "Run 'create-ncc' first, or set NCC_ID in .env")
-    domain = os.getenv("NEO4J_DOMAIN", "neo4j-aurabc.private.neo4j.com")
+    domain = require_env("NEO4J_DOMAIN", "Must be the real Aura FQDN (e.g. xxxxxxxx.databases.neo4j.io). Used as TLS SNI hostname.")
     profile = parse_profile_arg()
     token = get_databricks_token(profile)
 
@@ -402,21 +402,22 @@ def cmd_create_pe_rule():
     resources = load_resources()
     appgw = resources.get("applicationGateway", {})
     appgw_resource_id = appgw.get("resourceId", "")
-    pl_config_name = appgw.get("privateLinkConfigName", "")
+    frontend_ip_config_name = appgw.get("frontendIpConfigName", "")
 
     if not appgw_resource_id:
         print("ERROR: No applicationGateway.resourceId in azure-resources.json.")
         print("Run 'uv run python setup_azure.py' first.")
         sys.exit(1)
 
-    if not pl_config_name:
-        print("ERROR: No applicationGateway.privateLinkConfigName in azure-resources.json.")
+    if not frontend_ip_config_name:
+        print("ERROR: No applicationGateway.frontendIpConfigName in azure-resources.json.")
+        print("  Re-run 'uv run python setup_azure.py phase1' to regenerate azure-resources.json")
         sys.exit(1)
 
     print(f"\n  Account ID:    {account_id}")
     print(f"  NCC ID:        {ncc_id}")
     print(f"  App GW ID:     {appgw_resource_id}")
-    print(f"  PL Config:     {pl_config_name}")
+    print(f"  Group ID:      {frontend_ip_config_name}")
     print(f"  Domain:        {domain}")
 
     url = (
@@ -425,7 +426,7 @@ def cmd_create_pe_rule():
     )
     response = databricks_api("POST", url, token, {
         "resource_id": appgw_resource_id,
-        "group_id": pl_config_name,
+        "group_id": frontend_ip_config_name,
         "domain_names": [domain],
     })
 

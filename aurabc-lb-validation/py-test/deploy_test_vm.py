@@ -283,7 +283,7 @@ def cmd_deploy():
     """Deploy the test VM, SCP files, and write outputs."""
     print("=" * 60)
     print("DEPLOYING TEST VM")
-    print(f"  Region: {LOCATION} (Databricks region)")
+    print(f"  Region: {LOCATION}")
     print(f"  Resource Group: {RESOURCE_GROUP}")
     print("=" * 60)
 
@@ -483,7 +483,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Commands:
-  deploy    Deploy test VM in eastus, SCP test files
+  deploy    Deploy test VM, SCP test files
   test      Run pytest on the VM via SSH
   ssh       SSH into the VM for debugging
   cleanup   Delete all test VM resources

@@ -7,13 +7,13 @@
 
 Databricks serverless compute connects to Neo4j Aura BC through a chain of Azure networking components: a private endpoint, a Private Link Service, an internal load balancer, and an HAProxy reverse proxy. Validating that chain from inside Databricks requires deploying a notebook on serverless compute and waiting for NCC propagation, DNS resolution, and secret scope configuration to align. When something fails, the blast radius of possible causes spans six components across two Azure regions.
 
-The mock client removes Databricks from the equation. It deploys a test VM in the same Azure region as the Databricks workspace (eastus) with its own private endpoint to the same PLS that Databricks would use. The VM runs pytest over SSH, exercising the identical network path: private endpoint in eastus, cross-region to the PLS in westus3, through the internal load balancer, through HAProxy, out the NAT gateway, and into Aura BC. If the tests pass on the mock client, any failure from Databricks is isolated to NCC configuration or serverless compute behavior, not infrastructure.
+The mock client removes Databricks from the equation. It deploys a test VM in eastus with its own private endpoint to the same PLS that Databricks would use. The VM runs pytest over SSH, exercising the identical network path: private endpoint to PLS to internal load balancer to HAProxy, out the NAT gateway, and into Aura BC. If the tests pass on the mock client, any failure from Databricks is isolated to NCC configuration or serverless compute behavior, not infrastructure.
 
 ```
 Mock Client (eastus)                      Databricks Serverless (eastus)
     |                                          |
     v                                          v
-Private Endpoint -----> PLS (westus3) <----- Private Endpoint (via NCC)
+Private Endpoint -----> PLS (eastus) <----- Private Endpoint (via NCC)
                           |
                           v
                   Internal Load Balancer (10.0.1.4:7687)
@@ -84,7 +84,7 @@ test_bolt_through_private_endpoint       PASSED
 test_bolt_direct_baseline                FAILED
 ```
 
-**The private link chain works.** Test 4 connects a Neo4j bolt driver through the full path: VM (eastus) to PE to PLS (westus3) to ILB to HAProxy to NAT gateway to Aura BC. The query executes successfully, returning from server address 10.1.2.4:7687 (the PE IP). This confirms the cross-region private endpoint, the load balancer routing, HAProxy's TCP passthrough, and the NAT gateway's allowlisted egress all function correctly.
+**The private link chain works.** Test 4 connects a Neo4j bolt driver through the full path: VM (eastus) to PE to PLS (eastus) to ILB to HAProxy to NAT gateway to Aura BC. The query executes successfully, returning from server address 10.1.2.4:7687 (the PE IP). This confirms the private endpoint, the load balancer routing, HAProxy's TCP passthrough, and the NAT gateway's allowlisted egress all function correctly.
 
 ### Why the Direct Baseline Fails
 
@@ -149,7 +149,7 @@ After removing the `/etc/hosts` entry in the parent test process, `socket.gethos
 
 The four passing tests confirm:
 
-- **Cross-region private endpoints work.** A PE in eastus connects to a PLS in westus3 without issues. Databricks NCC creates the same cross-region PE.
+- **Private endpoints work.** A PE in eastus connects to a PLS in eastus. Databricks NCC creates the same PE.
 - **The LB and HAProxy chain routes bolt traffic.** TCP passthrough preserves the TLS session end-to-end. No TLS termination, no certificate mismatch.
 - **Keepalive settings prevent Azure PLS timeout drops.** `max_connection_lifetime=240` (under the ~300s PLS idle timeout) and `liveness_check_timeout=120` keep the connection pool healthy.
 - **The NAT gateway IP is correctly allowlisted.** Aura BC accepts connections from 20.106.75.1, the static IP that all traffic through the HAProxy exits from.

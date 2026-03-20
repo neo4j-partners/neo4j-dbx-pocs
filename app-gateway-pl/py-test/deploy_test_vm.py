@@ -104,13 +104,14 @@ def resolve_params():
 
     appgw = resources.get("applicationGateway", {})
     appgw_resource_id = appgw.get("resourceId", "")
-    pl_config_name = appgw.get("privateLinkConfigName", "")
+    frontend_ip_config_name = appgw.get("frontendIpConfigName", "")
 
     if not appgw_resource_id:
         print("ERROR: applicationGateway.resourceId not found in azure-resources.json")
         sys.exit(1)
-    if not pl_config_name:
-        print("ERROR: applicationGateway.privateLinkConfigName not found in azure-resources.json")
+    if not frontend_ip_config_name:
+        print("ERROR: applicationGateway.frontendIpConfigName not found in azure-resources.json")
+        print("  Re-run 'uv run python setup_azure.py phase1' to regenerate azure-resources.json")
         sys.exit(1)
 
     aura_fqdn = os.getenv("NEO4J_URI", "")
@@ -127,7 +128,7 @@ def resolve_params():
         "location": {"value": LOCATION},
         "prefix": {"value": PREFIX},
         "appGwResourceId": {"value": appgw_resource_id},
-        "plConfigName": {"value": pl_config_name},
+        "frontendIpConfigName": {"value": frontend_ip_config_name},
         "auraFqdn": {"value": aura_fqdn},
         "adminUsername": {"value": ADMIN_USER},
         "sshPublicKey": {"value": find_ssh_key()},
@@ -347,7 +348,7 @@ def cmd_deploy():
     params = resolve_params()
 
     print(f"\n  App GW: {params['appGwResourceId']['value'].split('/')[-1]}")
-    print(f"  PL Config: {params['plConfigName']['value']}")
+    print(f"  Frontend IP Config: {params['frontendIpConfigName']['value']}")
     print(f"  Aura FQDN: {params['auraFqdn']['value']}")
 
     # Create resource group

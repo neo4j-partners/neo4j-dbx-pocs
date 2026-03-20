@@ -1,0 +1,8 @@
+{
+  "auraFqdn": "a5e20181.databases.neo4j.io",
+  "privateEndpointName": "appgw-test-pe",
+  "resourceGroupName": "appgw-test-rg",
+  "vmName": "appgw-test-vm",
+  "vmPublicIp": "20.121.211.36",
+  "privateEndpointIp": "10.1.2.4"
+}

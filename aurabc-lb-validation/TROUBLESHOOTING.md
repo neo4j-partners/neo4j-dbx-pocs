@@ -23,14 +23,14 @@ The driver uses `bolt+s://neo4j-aurabc.private.neo4j.com:7687`. We use `bolt+s:/
 ```
 Databricks Serverless
     → NCC Private Endpoint (172.18.11.162, eastus)
-    → Private Link Service (westus3)
+    → Private Link Service (eastus)
     → Internal Load Balancer (10.0.1.4)
     → HAProxy VM (10.0.2.4)
     → NAT Gateway (20.106.75.1)
     → Neo4j Aura BC (f5919d06.databases.neo4j.io, resolves to 20.25.158.81)
 ```
 
-The NCC is in **eastus** (matching the Databricks workspace), while the Azure infrastructure (PLS, LB, VM, NAT GW) is in **westus3**. The private endpoint rule works cross-region.
+The NCC is in **eastus** (matching the Databricks workspace), while the Azure infrastructure (PLS, LB, VM, NAT GW) is in **eastus**. The private endpoint rule works cross-region.
 
 ## What we verified is working
 
@@ -109,7 +109,7 @@ HAProxy restarted successfully. Waiting for Databricks notebook re-run to confir
 
 **Result: Databricks notebook — still FAIL** (same `SSLEOFError`). However:
 
-**Result: py-test VM — PASS for the PE chain.** Ran `deploy_test_vm.py test` from the test VM in eastus, which exercises the same cross-region path (eastus VM → PE → PLS westus3 → LB → HAProxy → Aura BC). Results:
+**Result: py-test VM — PASS for the PE chain.** Ran `deploy_test_vm.py test` from the test VM in eastus, which exercises the same cross-region path (eastus VM → PE → PLS eastus → LB → HAProxy → Aura BC). Results:
 
 | Test | Result |
 |------|--------|
@@ -123,7 +123,7 @@ The `check` removal fixed the HAProxy chain. The PE → PLS → LB → HAProxy �
 
 ## Additional steps taken
 
-- **Rejected stale PE connection** from the deleted westus3 NCC on the PLS. Now only the active eastus NCC and py-test VM connections remain Approved.
+- **Rejected stale PE connection** from the deleted eastus NCC on the PLS. Now only the active eastus NCC and py-test VM connections remain Approved.
 - **Re-ran Databricks notebook** — still fails with same `SSLEOFError`.
 - **Verified NCC state via Databricks API** — NCC is in eastus, PE rule is ESTABLISHED, workspace is attached. Configuration is correct.
 
@@ -200,13 +200,13 @@ PRIVATE LINK CONNECTIVITY VERIFIED
 
 | Issue | Root Cause | Fix |
 |-------|-----------|-----|
-| `attach-ncc` failed: NCC must be in same region as workspace | NCC created in westus3 (infra region) but workspace is in eastus | Added `NCC_REGION` env var; recreated NCC in eastus |
+| `attach-ncc` failed: NCC must be in same region as workspace | NCC created in eastus (infra region) but workspace is in eastus | Added `NCC_REGION` env var; recreated NCC in eastus |
 | HAProxy `SD` (server disconnect) on forwarded connections | `check` directive caused periodic non-TLS probes to Aura BC, likely triggering rate limiting | Removed `check` from HAProxy backend config |
 | `SSLEOFError` on Databricks but py-test VM works | NCC PE rule domain (`neo4j-aurabc.private.neo4j.com`) became the TLS SNI hostname; Aura BC rejects unrecognized SNI | Changed PE rule domain to real Aura FQDN (`f5919d06.databases.neo4j.io`) |
 
 ## Key learnings for Aura BC + Databricks Private Link
 
-1. **NCC region must match workspace region**, not the Azure infrastructure region. Cross-region PE rules (eastus NCC → westus3 PLS) work fine.
+1. **NCC region must match workspace region**, not the Azure infrastructure region. Cross-region PE rules (eastus NCC → eastus PLS) work fine.
 2. **HAProxy health checks must be disabled** (no `check` directive) when proxying to Aura BC. Plain TCP probes without TLS cause Aura to drop the connection.
 3. **The NCC PE rule domain must be the real Aura FQDN.** Databricks uses this domain as the TLS SNI hostname. Aura BC enforces strict SNI matching against its certificate — arbitrary private domains are rejected. This differs from the private-link-ee project where a custom domain works.
 4. **Use `bolt+s://`** (not `neo4j+s://`). The `neo4j+s://` scheme performs routing table discovery which returns the Aura FQDN and bypasses the private endpoint.

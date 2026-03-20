@@ -136,37 +136,51 @@ def vm_public_ip():
 @pytest.fixture(scope="session", autouse=True)
 def ensure_appgw_ip_allowlisted(appgw_ip):
     """Ensure the App Gateway public IP is in the Aura BC allowlist."""
-    existing = _find_filter_for_ip(appgw_ip)
     created_filter_id = None
 
-    if existing:
-        print(f"\n  App GW IP {appgw_ip} already allowlisted (filter: {existing})")
-    else:
-        print(f"\n  Adding App GW IP {appgw_ip} to allowlist...")
-        created_filter_id = _add_ip(appgw_ip, "py-test: App Gateway")
+    try:
+        existing = _find_filter_for_ip(appgw_ip)
+        if existing:
+            print(f"\n  App GW IP {appgw_ip} already allowlisted (filter: {existing})")
+        else:
+            print(f"\n  Adding App GW IP {appgw_ip} to allowlist...")
+            created_filter_id = _add_ip(appgw_ip, "py-test: App Gateway")
+    except Exception as e:
+        print(f"\n  WARNING: Could not verify allowlist via Aura API: {e}")
+        print(f"  Ensure {appgw_ip} is manually allowlisted on the Aura instance.")
 
     yield
 
     if created_filter_id:
-        print(f"\n  Removing App GW IP filter {created_filter_id}...")
-        _remove_filter(created_filter_id)
+        try:
+            print(f"\n  Removing App GW IP filter {created_filter_id}...")
+            _remove_filter(created_filter_id)
+        except Exception as e:
+            print(f"\n  WARNING: Could not remove allowlist filter: {e}")
 
 
 @pytest.fixture(scope="function")
 def allowlist_vm_ip(vm_public_ip):
     """Add the VM's public IP to the allowlist; remove on teardown."""
-    existing = _find_filter_for_ip(vm_public_ip)
+    filter_id = None
+    try:
+        existing = _find_filter_for_ip(vm_public_ip)
+        if existing:
+            print(f"\n  VM IP {vm_public_ip} already allowlisted (filter: {existing})")
+            yield vm_public_ip
+            return
 
-    if existing:
-        print(f"\n  VM IP {vm_public_ip} already allowlisted (filter: {existing})")
-        yield vm_public_ip
-        return
-
-    print(f"\n  Adding VM IP {vm_public_ip} to allowlist...")
-    filter_id = _add_ip(vm_public_ip, "py-test: Test VM direct")
+        print(f"\n  Adding VM IP {vm_public_ip} to allowlist...")
+        filter_id = _add_ip(vm_public_ip, "py-test: Test VM direct")
+    except Exception as e:
+        print(f"\n  WARNING: Could not manage VM IP allowlist: {e}")
+        pytest.skip(f"Aura API unavailable for direct baseline test: {e}")
 
     yield vm_public_ip
 
     if filter_id:
-        print(f"\n  Removing VM IP filter {filter_id}...")
-        _remove_filter(filter_id)
+        try:
+            print(f"\n  Removing VM IP filter {filter_id}...")
+            _remove_filter(filter_id)
+        except Exception as e:
+            print(f"\n  WARNING: Could not remove VM IP filter: {e}")

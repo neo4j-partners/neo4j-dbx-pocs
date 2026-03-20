@@ -1,7 +1,7 @@
 # Aura BC Load Balancer — Deployment & Test Checklist
 
 **Date:** 2026-03-19
-**Azure Infra Region:** westus3
+**Azure Infra Region:** eastus
 **NCC Region:** eastus (must match workspace)
 **Workspace:** partner-demo-workspace-v2 (1098933906466604)
 **Aura BC Instance:** f5919d06 (staples-bc-validation)
@@ -22,7 +22,7 @@
 
 ## Databricks NCC Setup
 
-- [x] `create-ncc` — NCC created in **eastus** (first attempt in westus3 failed — NCC region must match workspace)
+- [x] `create-ncc` — NCC created in **eastus**
 - [x] `create-pe-rule` — PE rule created, status ESTABLISHED (auto-approved, no pending state)
 - [x] `approve` — 2 connections already Approved, no pending
 - [x] `attach-ncc` — NCC attached to workspace partner-demo-workspace-v2
@@ -52,10 +52,10 @@
 ### Create NCC
 > **PASS** — 2026-03-19
 > First attempt created NCC in westus3, but `attach-ncc` failed: "NCC must be in the same region as the workspace (eastus)".
-> Deleted the westus3 NCC and recreated in eastus. Cross-region PE rule to westus3 PLS works fine.
+> Deleted the westus3 NCC and recreated in eastus. Cross-region PE rule works fine.
 > NCC ID: `2a40363d-df07-4466-95ef-096ac43def63`
 >
-> **Finding:** The `create-ncc` command hardcodes `AZURE_LOCATION` as the NCC region. When the workspace is in a different region than the Azure infra, you must override: `AZURE_LOCATION=eastus uv run python deploy.py create-ncc --profile azure-account-admin`
+> **Finding:** The `create-ncc` command uses `NCC_REGION` (falling back to `AZURE_LOCATION`) as the NCC region. When the workspace is in a different region than the Azure infra, set `NCC_REGION` in `.env`.
 
 ### Create PE Rule
 > **PASS (2nd attempt)** — 2026-03-19
@@ -68,7 +68,7 @@
 
 ### Approve Connection
 > **PASS** — 2026-03-19
-> All connections auto-approved. Rejected stale PE from deleted westus3 NCC.
+> All connections auto-approved.
 
 ### Attach NCC
 > **PASS** — 2026-03-19
@@ -93,6 +93,6 @@
 > ```
 >
 > Three issues were found and fixed during testing:
-> 1. NCC region must match workspace (eastus), not infra (westus3) → added `NCC_REGION` env var
+> 1. NCC region must match workspace (eastus) → added `NCC_REGION` env var
 > 2. HAProxy `check` directive caused non-TLS probes that interfered with Aura BC → removed `check`
 > 3. NCC PE rule domain must be real Aura FQDN for correct TLS SNI → changed from private domain to `f5919d06.databases.neo4j.io`

@@ -2,11 +2,11 @@
 // Test VM for validating Private Endpoint → Application Gateway → Aura BC
 //
 // Deploys in eastus with a private endpoint to the Application Gateway's
-// Private Link configuration in westus3, simulating the cross-region path
-// that Databricks serverless takes via NCC.
+// Private Link configuration, simulating the path that Databricks serverless
+// takes via NCC.
 //
 // Traffic path:
-//   Test VM (eastus) → PE → App Gateway (westus3) → Aura BC (public internet)
+//   Test VM (eastus) → PE → App Gateway (eastus) → Aura BC (public internet)
 //
 // Note: The PE connection to Application Gateway starts as Pending and must
 // be approved after deployment. The deploy script handles this automatically.
@@ -21,8 +21,8 @@ param prefix string = 'appgw-test'
 @description('Resource ID of the Application Gateway')
 param appGwResourceId string
 
-@description('Name of the Private Link configuration on the Application Gateway')
-param plConfigName string
+@description('Name of the frontend IP configuration on the Application Gateway (used as PE group-id)')
+param frontendIpConfigName string
 
 @description('Neo4j Aura BC FQDN (e.g. f5919d06.databases.neo4j.io)')
 param auraFqdn string
@@ -146,8 +146,8 @@ resource nic 'Microsoft.Network/networkInterfaces@2025-01-01' = {
 // ---------------------------------------------------------------------------
 // Private Endpoint — connects to Application Gateway Private Link (cross-region)
 //
-// The groupIds must match the privateLinkConfiguration name on the App Gateway.
-// The connection will be in Pending state until approved.
+// The groupIds must match the frontend IP configuration name on the App Gateway
+// (the one with Private Link configured). The connection starts as Pending.
 // ---------------------------------------------------------------------------
 resource privateEndpoint 'Microsoft.Network/privateEndpoints@2025-01-01' = {
   name: peName
@@ -162,7 +162,7 @@ resource privateEndpoint 'Microsoft.Network/privateEndpoints@2025-01-01' = {
         properties: {
           privateLinkServiceId: appGwResourceId
           groupIds: [
-            plConfigName
+            frontendIpConfigName
           ]
         }
       }

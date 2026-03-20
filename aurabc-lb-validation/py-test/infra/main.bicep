@@ -1,25 +1,24 @@
 // ============================================================================
 // Test VM for validating Private Link → LB → HAProxy → Aura BC connectivity
 //
-// Deploys in the Databricks region (eastus) with a private endpoint to the
-// existing PLS in the infra region (westus3), simulating the cross-region
-// path that Databricks serverless takes.
+// Deploys in eastus with a private endpoint to the existing PLS,
+// simulating the path that Databricks serverless takes.
 //
 // Traffic path:
-//   Test VM (eastus) → PE → PLS (westus3) → ILB → HAProxy → NAT GW → Aura BC
+//   Test VM (eastus) → PE → PLS (eastus) → ILB → HAProxy → NAT GW → Aura BC
 //
 // Note: The PE IP is not available in Bicep at deploy time (PLS endpoints
 // don't populate customDnsConfigs). The deploy script queries it after
 // deployment and configures /etc/hosts via SSH.
 // ============================================================================
 
-@description('Azure region for the test VM (should match Databricks workspace region)')
+@description('Azure region for the test VM')
 param location string = 'eastus'
 
 @description('Prefix for resource names')
 param prefix string = 'aurabc-test'
 
-@description('Resource ID of the Private Link Service in the infra region')
+@description('Resource ID of the Private Link Service')
 param plsResourceId string
 
 @description('Neo4j Aura BC FQDN (e.g. f5919d06.databases.neo4j.io)')
@@ -143,7 +142,7 @@ resource nic 'Microsoft.Network/networkInterfaces@2025-01-01' = {
 }
 
 // ---------------------------------------------------------------------------
-// Private Endpoint — connects to PLS in the infra region (cross-region)
+// Private Endpoint — connects to PLS
 // ---------------------------------------------------------------------------
 resource privateEndpoint 'Microsoft.Network/privateEndpoints@2025-01-01' = {
   name: peName

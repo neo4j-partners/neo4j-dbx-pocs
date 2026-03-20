@@ -2,7 +2,7 @@
 End-to-end tests for the Aura BC Load Balancer + Private Link setup.
 
 Runs on the test VM deployed by deploy_test_vm.py. Traffic path:
-  Test VM (eastus) → PE → PLS (westus3) → ILB → HAProxy → NAT GW → Aura BC
+  Test VM (eastus) → PE → PLS (eastus) → ILB → HAProxy → NAT GW → Aura BC
 
 Usage (from the VM):
     uv run pytest -v -s

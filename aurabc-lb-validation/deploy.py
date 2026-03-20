@@ -31,7 +31,7 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RESOURCE_GROUP = os.getenv("AZURE_RESOURCE_GROUP", "aurabc-lb-poc-rg")
-LOCATION = os.getenv("AZURE_LOCATION", "westus3")
+LOCATION = os.getenv("AZURE_LOCATION", "eastus")
 DEPLOYMENT_NAME = "aurabc-lb-poc"
 BICEP_FILE = os.path.join(BASE_DIR, "infra", "main.bicep")
 PARAMS_FILE = os.path.join(BASE_DIR, "infra", "parameters.json")

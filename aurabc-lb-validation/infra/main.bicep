@@ -6,7 +6,7 @@
 // ============================================================================
 
 @description('Azure region for all resources')
-param location string = 'westus3'
+param location string = 'eastus'
 
 @description('Prefix for resource names')
 param prefix string = 'aurabc-lb'
