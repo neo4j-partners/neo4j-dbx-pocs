@@ -71,8 +71,6 @@ Expected results:
 [PASS] Query result: Connected over Private Link via bolt+s
 ```
 
-See [DEPLOY_STEPS_APPGW.md](DEPLOY_STEPS_APPGW.md) for a step-by-step checklist to track the full deployment and test workflow.
-
 ## Why Phased Deployment
 
 Application Gateway v2's Private Link feature validates against `httpListeners` only. L4 TCP listeners are invisible to this validation. If you deploy both L7 and L4 listeners simultaneously, Private Endpoint creation fails with:
@@ -90,7 +88,7 @@ The workaround: deploy in two phases.
 1. **Phase 1** deploys a pure L7 gateway (HTTP listener on port 80, no L4 properties). Private Link validation passes. A Private Endpoint is created and approved.
 2. **Phase 2** updates the same gateway to add L4 TCP listeners on port 7687. The Private Link tunnel, already established, continues to forward traffic. Azure does not re-validate the PL configuration on gateway updates.
 
-This was validated on 2026-03-20. See [FRESH.md](FRESH.md) for the full analysis and experiment log.
+This was validated on 2026-03-20. See [PHASED_DEPLOY_EXPERIMENT.md](PHASED_DEPLOY_EXPERIMENT.md) for the full analysis and experiment log.
 
 ## Prerequisites
 
@@ -207,9 +205,7 @@ app-gateway-pl/
   manage_ip_allowlist.py    # Aura BC IP allowlist management
   azure-resources.json      # Generated resource manifest (gitignored)
   appgw_private_link_test.ipynb  # Databricks notebook for Private Link validation
-  DEPLOY_STEPS_APPGW.md     # Deployment & test checklist
-  FRESH.md                  # Architecture analysis and experiment log
-  TROUBLESHOOTING.md        # Original troubleshooting log (pre-phased-deployment)
+  PHASED_DEPLOY_EXPERIMENT.md  # Architecture analysis and experiment log
   py-test/
     infra/main.bicep        # Test VM + Private Endpoint Bicep
     deploy_test_vm.py       # VM deployment orchestrator
