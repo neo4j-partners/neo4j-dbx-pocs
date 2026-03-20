@@ -240,6 +240,38 @@ cat py-test/test-output.log                # full test output
 uv run python deploy_test_vm.py ssh        # SSH into the test VM
 ```
 
+## Troubleshooting
+
+### Common errors
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `SSLEOFError` / TLS handshake fails, but TCP connects fine | NCC PE rule domain doesn't match the Aura BC TLS certificate. Databricks uses the PE rule domain as the SNI hostname, and Aura rejects unrecognized SNI values. | Set the PE rule domain to the real Aura FQDN (e.g. `f5919d06.databases.neo4j.io`), not an arbitrary private domain. Delete and recreate the PE rule if needed. |
+| HAProxy logs show `SD` (server disconnect) with 0 bytes transferred | The `check` directive sends periodic plain TCP probes without TLS. Aura BC drops these, which can trigger rate limiting or mark the backend unhealthy. | Remove `check` from the HAProxy backend server line. Keep `resolvers azure_dns`. |
+| `attach-ncc` fails: "NCC must be in the same region as the workspace" | NCC was created in a different region than the Databricks workspace. | Set `NCC_REGION` in `.env` to match the workspace region and recreate the NCC. |
+| `neo4j+s://` connects but bypasses the private endpoint | `neo4j+s://` performs routing table discovery, which returns the public Aura FQDN and routes traffic outside the PE. | Use `bolt+s://` instead. |
+| Connections drop after ~5 minutes of idle | Azure Private Link Service enforces a ~300 second idle timeout. | Set driver `max_connection_lifetime` and `liveness_check_timeout` to values below 300 seconds. |
+
+### Diagnostic commands
+
+Test SNI behavior through the private endpoint (run from a VM with PE access):
+
+```bash
+# Should succeed — real Aura FQDN as SNI
+openssl s_client -connect <PE_IP>:7687 -servername f5919d06.databases.neo4j.io
+
+# Will fail with "unexpected eof" — wrong SNI
+openssl s_client -connect <PE_IP>:7687 -servername some-other-domain.com
+```
+
+Inspect HAProxy logs on the proxy VM:
+
+```bash
+journalctl -u haproxy --no-pager -n 50
+# Look for: SD = server disconnect, SC = server closed, bytes_read = 0
+# HAProxy log fields: Tq/Tw/Tc/Tr/Tt bytes_read termination_state
+```
+
 ## Key constraints
 
 - **bolt+s:// required.** `neo4j+s://` performs routing table discovery which bypasses the proxy. Validated working against Aura BC on 2026-03-18.

@@ -615,6 +615,80 @@ def cmd_setup_secrets():
     print(f'  password = dbutils.secrets.get("{scope_name}", "password")')
 
 
+def cmd_ncc_status():
+    """Show NCC, PE rule, and workspace attachment status."""
+    print("=" * 60)
+    print("NCC STATUS")
+    print("=" * 60)
+
+    account_id = require_env("DATABRICKS_ACCOUNT_ID", "Set DATABRICKS_ACCOUNT_ID in .env")
+    ncc_id = require_env("NCC_ID", "Run 'create-ncc' first, or set NCC_ID in .env")
+    profile = parse_profile_arg()
+    token = get_databricks_token(profile)
+
+    # NCC details
+    ncc_url = f"{DATABRICKS_BASE_URL}/{account_id}/network-connectivity-configs/{ncc_id}"
+    ncc = databricks_api("GET", ncc_url, token)
+
+    print(f"\n--- NCC ---")
+    print(f"  Name:   {ncc.get('name', 'unknown')}")
+    print(f"  ID:     {ncc.get('network_connectivity_config_id', 'unknown')}")
+    print(f"  Region: {ncc.get('region', 'unknown')}")
+
+    # PE rules
+    rules = (
+        ncc.get("egress_config", {})
+        .get("target_rules", {})
+        .get("azure_private_endpoint_rules", [])
+    )
+    print(f"\n--- Private Endpoint Rules ({len(rules)}) ---")
+    for rule in rules:
+        state = rule.get("connection_state", "unknown")
+        domain = ", ".join(rule.get("domain_names", []))
+        group_id = rule.get("group_id", "unknown")
+        rule_id = rule.get("rule_id", "unknown")
+        resource = rule.get("resource_id", "").split("/")[-1]
+        print(f"  Rule:     {rule_id}")
+        print(f"  State:    {state}")
+        print(f"  Domain:   {domain}")
+        print(f"  Group ID: {group_id}")
+        print(f"  Resource: {resource}")
+        if len(rules) > 1:
+            print()
+
+    # Workspace attachment
+    workspace_id = os.getenv("DATABRICKS_WORKSPACE_ID", "")
+    if workspace_id:
+        print(f"\n--- Workspace ---")
+        workspace_url = f"{DATABRICKS_BASE_URL}/{account_id}/workspaces/{workspace_id}"
+        workspace = databricks_api("GET", workspace_url, token)
+        ws_ncc = workspace.get("network_connectivity_config_id", "")
+        print(f"  Name:       {workspace.get('workspace_name', 'unknown')}")
+        print(f"  ID:         {workspace_id}")
+        print(f"  NCC:        {ws_ncc or 'NONE'}")
+        print(f"  Attached:   {'YES' if ws_ncc == ncc_id else 'NO' if ws_ncc else 'NO NCC'}")
+
+    # Azure PE connections
+    print(f"\n--- App Gateway PE Connections ---")
+    check_az_cli()
+    appgw_name = f"{PREFIX}-gw"
+    pe_conns = run_az(
+        f"network application-gateway show "
+        f"--resource-group {RESOURCE_GROUP} --name {appgw_name} "
+        f"--query privateEndpointConnections",
+        check=False,
+    )
+    if pe_conns and isinstance(pe_conns, list):
+        for conn in pe_conns:
+            props = conn.get("properties", conn)
+            state = props.get("privateLinkServiceConnectionState", {})
+            name = conn.get("name", "unknown")
+            status = state.get("status", "unknown")
+            print(f"  {name}: {status}")
+    else:
+        print("  No PE connections")
+
+
 def cmd_detach_ncc():
     """Detach NCC from workspace, delete rules, delete NCC."""
     print("=" * 60)
@@ -777,6 +851,7 @@ Commands (Databricks NCC):
   approve        Approve pending private endpoint connections
   attach-ncc     Attach NCC to a Databricks workspace
   setup-secrets  Store Neo4j credentials in Databricks secrets
+  ncc-status     Show NCC, PE rule, and workspace status
   detach-ncc     Detach and delete NCC from Databricks
 
 Databricks commands accept --profile <name> for CLI authentication.
@@ -785,7 +860,7 @@ Databricks commands accept --profile <name> for CLI authentication.
     all_commands = [
         "status", "cleanup",
         "create-ncc", "create-pe-rule", "approve", "attach-ncc",
-        "setup-secrets", "detach-ncc",
+        "setup-secrets", "ncc-status", "detach-ncc",
     ]
     parser.add_argument("command", choices=all_commands)
     args, _ = parser.parse_known_args()
@@ -798,6 +873,7 @@ Databricks commands accept --profile <name> for CLI authentication.
         "approve": cmd_approve,
         "attach-ncc": cmd_attach_ncc,
         "setup-secrets": cmd_setup_secrets,
+        "ncc-status": cmd_ncc_status,
         "detach-ncc": cmd_detach_ncc,
     }
 

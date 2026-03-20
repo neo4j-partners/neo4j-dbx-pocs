@@ -21,7 +21,9 @@ Neo4j Aura Business Critical
 cp .env.sample .env
 # Edit .env: NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD,
 #            AURA_API_CLIENT_ID, AURA_API_CLIENT_SECRET,
-#            AURA_ORG_ID, AURA_INSTANCE_ID
+#            AURA_ORG_ID, AURA_INSTANCE_ID,
+#            DATABRICKS_ACCOUNT_ID, DATABRICKS_WORKSPACE_ID,
+#            NEO4J_DOMAIN (bare FQDN, no scheme)
 
 # 2. Deploy App Gateway (phased — see "Why Phased Deployment" below)
 #    Phase 1: Pure L7 gateway + Private Link + Private Endpoint (~8 min)
@@ -42,10 +44,13 @@ uv run python deploy.py approve
 # 6. Attach NCC to workspace (wait ~10 min for propagation)
 uv run python deploy.py attach-ncc --profile <databricks-cli-profile>
 
-# 7. Store Neo4j credentials in Databricks secrets
+# 7. Check NCC status (PE rule should be ESTABLISHED)
+uv run python deploy.py ncc-status --profile <databricks-cli-profile>
+
+# 8. Store Neo4j credentials in Databricks secrets
 uv run python deploy.py setup-secrets --profile <databricks-cli-profile>
 
-# 8. Test from a Databricks serverless notebook
+# 9. Test from a Databricks serverless notebook
 #    Import appgw_private_link_test.ipynb into your workspace,
 #    update NEO4J_DOMAIN in the config cell, and run on serverless compute.
 ```
@@ -167,6 +172,7 @@ Key properties:
 | `approve` | Approve pending private endpoint connections |
 | `attach-ncc` | Attach NCC to a Databricks workspace |
 | `setup-secrets` | Store Neo4j credentials in Databricks secrets |
+| `ncc-status` | Show NCC, PE rule state, and workspace attachment |
 | `detach-ncc` | Detach and delete NCC from Databricks |
 
 ### Other scripts
