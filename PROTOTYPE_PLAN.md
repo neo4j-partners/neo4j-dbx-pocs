@@ -44,27 +44,49 @@ The App Gateway is currently deployed and working. Use it for the initial NCC do
 
 This is the highest-value test. If it works, `neo4j+s://` is enabled with zero infrastructure changes.
 
+**Step 0: Verify TLS certificates cover the routing table hostnames.**
+
+Before touching NCC configuration, confirm that Aura's TLS certificate covers the routing table hostnames. These are hostnames Aura assigns and returns in the routing table, so the certificate should cover them, but verification eliminates a variable before the tunnel test.
+
+Run `openssl s_client` against Aura's public IP using each routing hostname as the SNI:
+
+```bash
+openssl s_client -connect 20.127.122.152:7687 -servername p-a5e20181-83e0-0001.production-orch-1275.neo4j.io
+openssl s_client -connect 20.127.122.152:7687 -servername p-a5e20181-83e0-0002.production-orch-1275.neo4j.io
+openssl s_client -connect 20.127.122.152:7687 -servername p-a5e20181-83e0-0003.production-orch-1275.neo4j.io
+```
+
+If the certificate validates (look for `Verify return code: 0 (ok)` and check that the subject or SAN covers the hostname), TLS SNI is confirmed to work. If it fails, the routing table hostnames may not be independently addressable via SNI, and the prototype cannot succeed.
+
+This also confirms that the NCC domain approach solves the TLS SNI problem. NCC only intercepts DNS resolution, not the TLS handshake. The driver sends the hostname it is connecting to as the SNI in the TLS ClientHello. Both the App Gateway L4 TCP listener and the LB project's HAProxy operate in TCP passthrough mode, forwarding raw bytes without terminating or inspecting TLS. The SNI reaches Aura untouched. Aura receives the original member hostname as SNI and routes to the correct cluster member. The certificate covers the hostname because Aura is the TLS endpoint and these are hostnames Aura assigned. The full chain works: DNS resolution through NCC, TLS SNI preserved through the TCP passthrough layer (App Gateway or HAProxy), certificate valid at Aura's edge.
+
 **Step 1: Collect the routing table hostnames.**
 
-Run the existing `routing_poc/inspect_routing_table.py` script (or the output we already have). The hostnames are:
+Run `routing_poc/inspect_routing_table.py` from the app-gateway-pl project. The App Gateway instance returns:
 
 ```
-p-8cc8f63c-365a-0001.production-orch-1275.neo4j.io
-p-8cc8f63c-365a-0002.production-orch-1275.neo4j.io
-p-8cc8f63c-365a-0003.production-orch-1275.neo4j.io
+p-a5e20181-83e0-0001.production-orch-1275.neo4j.io
+p-a5e20181-83e0-0002.production-orch-1275.neo4j.io
+p-a5e20181-83e0-0003.production-orch-1275.neo4j.io
 ```
 
-Plus the existing connection FQDN: `8cc8f63c.databases.neo4j.io`.
+Plus the connection FQDN: `a5e20181.databases.neo4j.io`. Four domains total, within the 10-domain limit per PE rule.
 
 **Step 2: Update the NCC PE rule with all four domains.**
 
-Use the Databricks REST API PATCH endpoint to update the existing PE rule's `domain_names` array:
+The `deploy.py` script has an `update-pe-domains` command that automates this. It connects to Aura BC, fetches the routing table, finds the existing PE rule, and PATCHes it with all four domains:
+
+```bash
+uv run python deploy.py update-pe-domains --profile <databricks-cli-profile>
+```
+
+Under the hood, this calls the Databricks REST API:
 
 ```
 PATCH /api/2.0/accounts/{ACCOUNT_ID}/network-connectivity-configs/{NCC_ID}/private-endpoint-rules/{RULE_ID}?update_mask=domain_names
 ```
 
-The body would contain all four domains. This can be done with `curl` or by adding a small command to the existing `deploy.py`. The NCC does not need to be detached from the workspace.
+The NCC does not need to be detached from the workspace.
 
 **Step 3: Wait for propagation and restart serverless compute.**
 

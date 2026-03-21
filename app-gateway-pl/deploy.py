@@ -5,13 +5,14 @@ Azure setup is handled by setup_azure.py. This script manages the Databricks
 side and post-deployment operations.
 
 Commands:
-    uv run python deploy.py status        — Show status of deployed resources
-    uv run python deploy.py create-ncc    — Create a Databricks NCC
-    uv run python deploy.py create-pe-rule — Create private endpoint rule in NCC
-    uv run python deploy.py approve       — Approve pending private endpoint connections
-    uv run python deploy.py attach-ncc    — Attach NCC to a Databricks workspace
-    uv run python deploy.py setup-secrets — Store Neo4j credentials in Databricks secrets
-    uv run python deploy.py detach-ncc    — Detach and delete NCC from Databricks
+    uv run python deploy.py status            — Show status of deployed resources
+    uv run python deploy.py create-ncc        — Create a Databricks NCC
+    uv run python deploy.py create-pe-rule    — Create private endpoint rule in NCC
+    uv run python deploy.py approve           — Approve pending private endpoint connections
+    uv run python deploy.py attach-ncc        — Attach NCC to a Databricks workspace
+    uv run python deploy.py setup-secrets     — Store Neo4j credentials in Databricks secrets
+    uv run python deploy.py update-pe-domains — Add routing table hostnames to PE rule (neo4j+s://)
+    uv run python deploy.py detach-ncc        — Detach and delete NCC from Databricks
     uv run python deploy.py cleanup       — Tear down all infrastructure
 """
 
@@ -704,6 +705,140 @@ def cmd_ncc_status():
         print("  No PE connections")
 
 
+def cmd_update_pe_domains():
+    """Update NCC PE rule with routing table hostnames to enable neo4j+s:// protocol.
+
+    Connects to Aura BC, fetches the routing table to discover cluster member
+    hostnames, then PATCHes the NCC PE rule's domain_names to include all of them
+    alongside the connection FQDN. This allows NCC to intercept DNS for routing
+    table hostnames and route them through the private endpoint.
+    """
+    print("=" * 60)
+    print("UPDATE PE RULE DOMAINS (neo4j+s:// prototype)")
+    print("=" * 60)
+
+    from urllib.parse import urlparse
+    from neo4j import GraphDatabase
+
+    account_id = require_env("DATABRICKS_ACCOUNT_ID", "Set DATABRICKS_ACCOUNT_ID in .env")
+    ncc_id = require_env("NCC_ID", "Run 'create-ncc' first, or set NCC_ID in .env")
+    neo4j_uri = require_env("NEO4J_URI", "Set NEO4J_URI in .env")
+    neo4j_user = require_env("NEO4J_USERNAME", "Set NEO4J_USERNAME in .env")
+    neo4j_password = require_env("NEO4J_PASSWORD", "Set NEO4J_PASSWORD in .env")
+    domain = require_env("NEO4J_DOMAIN", "Set NEO4J_DOMAIN in .env")
+    profile = parse_profile_arg()
+    token = get_databricks_token(profile)
+
+    hostname = urlparse(neo4j_uri).hostname
+    if not hostname:
+        print(f"  ERROR: Could not extract hostname from NEO4J_URI: {neo4j_uri}")
+        sys.exit(1)
+
+    # Step 1: Fetch routing table from Aura BC
+    print(f"\nStep 1: Fetch routing table from {hostname}")
+    try:
+        driver = GraphDatabase.driver(
+            f"neo4j+s://{hostname}",
+            auth=(neo4j_user, neo4j_password),
+        )
+        driver.execute_query("RETURN 1 AS n")
+
+        all_hostnames = set()
+        pool = driver._pool
+        if hasattr(pool, "routing_tables"):
+            for db, table in pool.routing_tables.items():
+                for role in ("routers", "readers", "writers"):
+                    for addr in getattr(table, role, []):
+                        all_hostnames.add(addr[0])
+        driver.close()
+    except Exception as e:
+        print(f"  ERROR: Failed to fetch routing table: {e}")
+        sys.exit(1)
+
+    if not all_hostnames:
+        print("  ERROR: No routing table hostnames found.")
+        sys.exit(1)
+
+    # Build the full domain list: connection FQDN + routing members
+    all_domains = sorted({domain} | all_hostnames)
+    print(f"  Connection FQDN: {domain}")
+    print(f"  Routing members: {len(all_hostnames)}")
+    for h in sorted(all_hostnames):
+        print(f"    {h}")
+    print(f"  Total domains:   {len(all_domains)}")
+
+    if len(all_domains) > 10:
+        print(f"  ERROR: {len(all_domains)} domains exceeds the NCC limit of 10 per PE rule.")
+        sys.exit(1)
+
+    # Step 2: Find the existing PE rule
+    print(f"\nStep 2: Find existing PE rule in NCC {ncc_id}")
+    ncc_url = f"{DATABRICKS_BASE_URL}/{account_id}/network-connectivity-configs/{ncc_id}"
+    ncc = databricks_api("GET", ncc_url, token)
+
+    rules = (
+        ncc.get("egress_config", {})
+        .get("target_rules", {})
+        .get("azure_private_endpoint_rules", [])
+    )
+
+    if not rules:
+        print("  ERROR: No PE rules found in NCC. Run 'create-pe-rule' first.")
+        sys.exit(1)
+
+    # Find the rule that has our connection domain
+    target_rule = None
+    for rule in rules:
+        rule_domains = rule.get("domain_names", [])
+        if domain in rule_domains:
+            target_rule = rule
+            break
+
+    if not target_rule:
+        # Fall back to the first rule if only one exists
+        if len(rules) == 1:
+            target_rule = rules[0]
+        else:
+            print(f"  ERROR: Could not find PE rule with domain '{domain}'.")
+            print(f"  Rules found: {len(rules)}")
+            sys.exit(1)
+
+    rule_id = target_rule.get("rule_id", "")
+    current_domains = target_rule.get("domain_names", [])
+    print(f"  Rule ID:         {rule_id}")
+    print(f"  Current domains: {current_domains}")
+
+    if set(current_domains) == set(all_domains):
+        print("\n  Domains already up to date. Nothing to change.")
+        return
+
+    # Step 3: PATCH the PE rule with all domains
+    print(f"\nStep 3: Update PE rule with {len(all_domains)} domains")
+    patch_url = (
+        f"{DATABRICKS_BASE_URL}/{account_id}/network-connectivity-configs/"
+        f"{ncc_id}/private-endpoint-rules/{rule_id}?update_mask=domain_names"
+    )
+    response = databricks_api("PATCH", patch_url, token, {
+        "domain_names": all_domains,
+    })
+
+    updated_domains = response.get("domain_names", [])
+
+    print()
+    print("=" * 60)
+    print("DONE")
+    print("=" * 60)
+    print()
+    print("  PE rule updated with domains:")
+    for d in sorted(updated_domains):
+        label = "(connection FQDN)" if d == domain else "(routing member)"
+        print(f"    {d}  {label}")
+    print()
+    print("  Wait ~5 minutes for NCC changes to propagate.")
+    print("  Restart any running serverless compute, then test with neo4j+s://")
+    print("  in a Databricks notebook.")
+
+
 def cmd_detach_ncc():
     """Detach NCC from workspace, delete rules, delete NCC."""
     print("=" * 60)
@@ -861,13 +996,14 @@ Commands (post-deployment):
   cleanup        Tear down all Azure infrastructure
 
 Commands (Databricks NCC):
-  create-ncc     Create a Databricks NCC
-  create-pe-rule Create private endpoint rule in NCC
-  approve        Approve pending private endpoint connections
-  attach-ncc     Attach NCC to a Databricks workspace
-  setup-secrets  Store Neo4j credentials in Databricks secrets
-  ncc-status     Show NCC, PE rule, and workspace status
-  detach-ncc     Detach and delete NCC from Databricks
+  create-ncc         Create a Databricks NCC
+  create-pe-rule     Create private endpoint rule in NCC
+  approve            Approve pending private endpoint connections
+  attach-ncc         Attach NCC to a Databricks workspace
+  setup-secrets      Store Neo4j credentials in Databricks secrets
+  ncc-status         Show NCC, PE rule, and workspace status
+  update-pe-domains  Add routing table hostnames to PE rule (neo4j+s://)
+  detach-ncc         Detach and delete NCC from Databricks
 
 Databricks commands accept --profile <name> for CLI authentication.
         """,
@@ -875,7 +1011,7 @@ Databricks commands accept --profile <name> for CLI authentication.
     all_commands = [
         "status", "cleanup",
         "create-ncc", "create-pe-rule", "approve", "attach-ncc",
-        "setup-secrets", "ncc-status", "detach-ncc",
+        "setup-secrets", "ncc-status", "update-pe-domains", "detach-ncc",
     ]
     parser.add_argument("command", choices=all_commands)
     args, _ = parser.parse_known_args()
@@ -889,6 +1025,7 @@ Databricks commands accept --profile <name> for CLI authentication.
         "attach-ncc": cmd_attach_ncc,
         "setup-secrets": cmd_setup_secrets,
         "ncc-status": cmd_ncc_status,
+        "update-pe-domains": cmd_update_pe_domains,
         "detach-ncc": cmd_detach_ncc,
     }
 
