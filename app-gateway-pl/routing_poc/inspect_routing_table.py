@@ -10,9 +10,11 @@ Usage:
     uv run python routing_poc/inspect_routing_table.py
 """
 
+import json
 import os
 import socket
 import sys
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
@@ -32,6 +34,8 @@ hostname = urlparse(URI).hostname
 if not hostname:
     print(f"ERROR: Could not extract hostname from URI: {URI}")
     sys.exit(1)
+
+HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "routing_history.json")
 
 print(f"Connection FQDN: {hostname}")
 print(f"Connection URI:  {URI}")
@@ -213,3 +217,111 @@ else:
         print(f"  NOTE: Hostnames resolve to {len(all_ips)} distinct IPs: {sorted(all_ips)}")
         print("  Each IP represents a separate destination that must be reachable")
         print("  through the private link chain.")
+
+
+# -- Step 6: Save snapshot and compare with history -------------------------
+
+print()
+print("=" * 60)
+print("STEP 6: ROUTING TABLE HISTORY")
+print("=" * 60)
+
+snapshot = {
+    "timestamp": datetime.now(timezone.utc).isoformat(),
+    "connection_fqdn": hostname,
+    "routers": sorted(f"{h}:{p}" for h, p in routing_entries["routers"]),
+    "readers": sorted(f"{h}:{p}" for h, p in routing_entries["readers"]),
+    "writers": sorted(f"{h}:{p}" for h, p in routing_entries["writers"]),
+    "all_hostnames": sorted(all_hostnames),
+    "resolved_ips": {h: ips for h, ips in sorted(resolved.items()) if ips},
+}
+
+# Load existing history
+history = []
+if os.path.exists(HISTORY_FILE):
+    with open(HISTORY_FILE) as f:
+        history = json.load(f)
+
+# Compare with most recent previous snapshot
+if history:
+    prev = history[-1]
+    prev_time = prev["timestamp"]
+    first_time = history[0]["timestamp"]
+
+    print(f"\n  History file: {HISTORY_FILE}")
+    print(f"  Snapshots:    {len(history)} (first: {first_time[:19]}Z)")
+    print(f"  Previous:     {prev_time[:19]}Z")
+    print(f"  Current:      {snapshot['timestamp'][:19]}Z")
+
+    # Compare hostnames
+    prev_hosts = set(prev.get("all_hostnames", []))
+    curr_hosts = set(snapshot["all_hostnames"])
+    added = curr_hosts - prev_hosts
+    removed = prev_hosts - curr_hosts
+
+    if added or removed:
+        print(f"\n  ** HOSTNAME CHANGES DETECTED **")
+        for h in sorted(added):
+            print(f"    + {h}  (new)")
+        for h in sorted(removed):
+            print(f"    - {h}  (removed)")
+    else:
+        print(f"\n  Hostnames: STABLE (no changes)")
+
+    # Compare role assignments
+    role_changes = []
+    for role in ("routers", "readers", "writers"):
+        prev_set = set(prev.get(role, []))
+        curr_set = set(snapshot[role])
+        role_added = curr_set - prev_set
+        role_removed = prev_set - curr_set
+        for entry in sorted(role_added):
+            role_changes.append(f"    + {role}: {entry}")
+        for entry in sorted(role_removed):
+            role_changes.append(f"    - {role}: {entry}")
+
+    if role_changes:
+        print(f"\n  ** ROLE CHANGES DETECTED **")
+        for line in role_changes:
+            print(line)
+    else:
+        print(f"  Roles:     STABLE (no changes)")
+
+    # Compare IP resolutions
+    prev_ips = prev.get("resolved_ips", {})
+    curr_ips = snapshot["resolved_ips"]
+    ip_changes = []
+    for h in sorted(set(list(prev_ips.keys()) + list(curr_ips.keys()))):
+        old = prev_ips.get(h, [])
+        new = curr_ips.get(h, [])
+        if old != new:
+            ip_changes.append(f"    {h}: {old} -> {new}")
+
+    if ip_changes:
+        print(f"\n  ** IP RESOLUTION CHANGES DETECTED **")
+        for line in ip_changes:
+            print(line)
+    else:
+        print(f"  IPs:       STABLE (no changes)")
+
+    # Summary across all history: count how many unique snapshots had different hostnames
+    unique_hostname_sets = set()
+    for entry in history:
+        unique_hostname_sets.add(tuple(sorted(entry.get("all_hostnames", []))))
+    unique_hostname_sets.add(tuple(sorted(snapshot["all_hostnames"])))
+
+    print(f"\n  Unique hostname configurations seen: {len(unique_hostname_sets)}")
+    if len(unique_hostname_sets) == 1:
+        print(f"  Hostnames have been stable across all {len(history) + 1} snapshots.")
+else:
+    print(f"\n  First run — no history to compare against.")
+    print(f"  History file: {HISTORY_FILE}")
+
+# Append and save
+history.append(snapshot)
+with open(HISTORY_FILE, "w") as f:
+    json.dump(history, f, indent=2)
+    f.write("\n")
+
+print(f"\n  Snapshot saved. Total snapshots: {len(history)}")
+print(f"  Run this script periodically to track routing table stability.")

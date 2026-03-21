@@ -4,3 +4,4 @@ __pycache__/
 infra/.params-resolved.json
 infra/main.json
 azure-resources.json
+routing_poc/routing_history.json

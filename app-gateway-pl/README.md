@@ -1,19 +1,32 @@
 # Application Gateway — Databricks Serverless to Neo4j Aura BC
 
-**Status: Working** — Validated end-to-end on 2026-03-20. Databricks serverless compute connects to Neo4j Aura Business Critical over Azure Private Link via Application Gateway v2 L4 TCP proxy. See [PHASED_DEPLOY_EXPERIMENT.md](PHASED_DEPLOY_EXPERIMENT.md) for the full experiment log.
+**Status: Validated** — Full end-to-end connectivity confirmed on 2026-03-20, including `neo4j+s://` with routing table discovery and client-side read/write splitting across cluster members. See [ARCHITECTURE.md](ARCHITECTURE.md) for the complete technical explanation.
 
-Private connectivity from Databricks serverless compute to Neo4j Aura Business Critical using Azure Application Gateway v2 as an L4 TCP proxy with Private Link. No VMs, no HAProxy, no NAT Gateway, no Load Balancer. The gateway handles TCP passthrough on port 7687, preserving TLS SNI end-to-end, while Private Link accepts Databricks NCC private endpoints.
+## How It Works
+
+This architecture connects Databricks serverless compute to Neo4j Aura Business Critical over Azure Private Link using Application Gateway v2 as an L4 TCP proxy. It is fully managed: no VMs, no HAProxy, no NAT Gateway, no Load Balancer.
+
+Two mechanisms make this the ideal solution for private Databricks-to-Aura-BC connectivity.
+
+**L4 TCP passthrough preserves TLS SNI end-to-end.** The Application Gateway operates at Layer 4, forwarding raw TCP bytes on port 7687 without terminating or inspecting TLS. When the Neo4j driver initiates a connection, it sends the Aura BC hostname as the Server Name Indication (SNI) value in the TLS ClientHello. That SNI passes through the entire chain untouched: from Databricks through the Private Link tunnel, through the Application Gateway, and out to Aura's shared ingress endpoint. Aura BC serves many database instances behind a single IP address and relies on SNI to route each connection to the correct instance. Any intermediary that strips or changes the SNI causes Aura to reject the connection. L4 TCP passthrough eliminates this risk because the gateway never sees the TLS payload.
+
+**NCC multi-domain private endpoint rules enable full `neo4j+s://` protocol support.** The `neo4j+s://` protocol triggers routing table discovery: after the initial connection, the driver asks the server for a list of cluster member hostnames and opens separate connections to each. These routing table hostnames (in the `*.production-orch-*.neo4j.io` domain) differ entirely from the connection FQDN (`*.databases.neo4j.io`). Without all hostnames in the NCC private endpoint rule, Databricks resolves them via public DNS and bypasses the Private Link tunnel. The solution is a single PE rule with all domains in its `domain_names` array (the connection FQDN plus the three routing table member hostnames, four total, well within the 10-domain limit). NCC intercepts DNS for every listed domain and routes all connections through the private endpoint. One API call, zero infrastructure changes.
+
+These two mechanisms together deliver the full Neo4j driver protocol stack over Private Link: TLS encryption end-to-end, SNI-based instance routing at Aura's edge, and client-side routing with automatic read/write splitting across cluster members.
 
 ```
 Databricks Serverless (eastus)
     |
-    |  NCC Private Endpoint
+    |  NCC Private Endpoint (multi-domain: connection FQDN + routing table members)
     v
-Application Gateway v2 (eastus)
-    |  L4 TCP listener, port 7687
-    |  TLS passthrough (preserves Bolt SNI)
+Private Link tunnel (Azure backbone)
+    |
     v
-Neo4j Aura Business Critical
+Application Gateway v2 (L4 TCP listener, port 7687, TLS passthrough)
+    |
+    |  Outbound via gateway public IP (allowlisted on Aura BC)
+    v
+Neo4j Aura Business Critical (*.databases.neo4j.io:7687)
 ```
 
 ## Quick Start
@@ -61,17 +74,11 @@ uv run python deploy.py setup-secrets --profile <databricks-cli-profile>
 
 After attaching the NCC and storing secrets, import `appgw_private_link_test.ipynb` into your Databricks workspace and run it on serverless compute. The notebook reads both the Neo4j domain and password from the `neo4j-appgw-poc` secret scope (populated by `deploy.py setup-secrets`). No manual edits needed.
 
-The notebook runs two tests:
+The notebook runs three tests:
 
 1. **TCP connectivity** — verifies the Private Link path is open on port 7687
-2. **Neo4j driver** — connects with `bolt+s://`, authenticates, and runs a test query
-
-Expected results:
-```
-[PASS] TCP connection established in ~80ms
-[PASS] Connected and authenticated in ~350ms
-[PASS] Query result: Connected over Private Link via bolt+s
-```
+2. **Neo4j driver (bolt+s://)** — connects with `bolt+s://`, authenticates, and runs a test query
+3. **Neo4j driver (neo4j+s://)** — connects with `neo4j+s://`, inspects the routing table, and validates read/write distribution across cluster members. Requires NCC PE rule updated with routing table hostnames (see `deploy.py update-pe-domains`)
 
 ## Why Phased Deployment
 
@@ -114,7 +121,7 @@ Tests `neo4j+s://`, `bolt+s://`, and both schemes with Private Link keepalive se
 
 | Constraint | Detail |
 |------------|--------|
-| `bolt+s://` required | `neo4j+s://` triggers routing table discovery, which returns the Aura FQDN and bypasses the PE. Use `bolt+s://` only. |
+| `neo4j+s://` requires NCC domain update | `neo4j+s://` triggers routing table discovery, returning cluster member hostnames that must be added to the NCC PE rule. Run `deploy.py update-pe-domains` to automate this. `bolt+s://` works without the domain update. |
 | Real Aura FQDN as NCC domain | Databricks uses the PE rule domain as the TLS SNI hostname. Aura BC rejects unrecognized SNI. The NCC PE rule domain must be the actual Aura FQDN (e.g. `f5919d06.databases.neo4j.io`). |
 | ~300s idle timeout | App Gateway Private Link has a ~5 minute idle timeout. Set `max_connection_lifetime` and `liveness_check_timeout` below 300 in the Neo4j driver. |
 | NCC region matches workspace | The NCC must be in the same region as the Databricks workspace. The App Gateway can be in the same or a different region. |
@@ -173,6 +180,7 @@ Key properties:
 | `attach-ncc` | Attach NCC to a Databricks workspace |
 | `setup-secrets` | Store Neo4j credentials and domain in Databricks secrets |
 | `ncc-status` | Show NCC, PE rule state, and workspace attachment |
+| `update-pe-domains` | Add routing table member hostnames to PE rule (enables `neo4j+s://`) |
 | `detach-ncc` | Detach and delete NCC from Databricks |
 
 ### Other scripts
@@ -181,6 +189,7 @@ Key properties:
 |--------|---------|
 | `validate_bolt.py` | Test bolt+s:// and neo4j+s:// connectivity |
 | `manage_ip_allowlist.py` | Manage Aura BC IP allowlist entries |
+| `routing_poc/inspect_routing_table.py` | Inspect Neo4j routing table hostnames from Aura BC |
 | `appgw_private_link_test.ipynb` | Databricks notebook for end-to-end Private Link validation |
 
 ## Bicep Templates
@@ -189,7 +198,6 @@ Key properties:
 |------|---------|
 | `infra/main-phase1.bicep` | Pure L7 App Gateway + Private Link (no L4 properties) |
 | `infra/main-phase2.bicep` | L7 + L4 App Gateway (adds TCP listener on port 7687) |
-| `infra/main.bicep` | Original single-deploy template (does not work with PE creation) |
 | `py-test/infra/main.bicep` | Test VM + Private Endpoint for end-to-end validation |
 
 ## Project Files
@@ -199,14 +207,14 @@ app-gateway-pl/
   infra/
     main-phase1.bicep       # Phase 1: pure L7 gateway + Private Link
     main-phase2.bicep       # Phase 2: adds L4 TCP listener
-    main.bicep              # Original (broken for PE creation)
-    parameters.json         # Deployment parameters
   setup_azure.py            # Phased Azure deployment (phase1/phase2/status/cleanup)
   deploy.py                 # Databricks NCC integration
   validate_bolt.py          # Direct bolt+s:// validation
   manage_ip_allowlist.py    # Aura BC IP allowlist management
   azure-resources.json      # Generated resource manifest (gitignored)
   appgw_private_link_test.ipynb  # Databricks notebook for Private Link validation
+  routing_poc/
+    inspect_routing_table.py  # Neo4j routing table inspection
   py-test/
     infra/main.bicep        # Test VM + Private Endpoint Bicep
     deploy_test_vm.py       # VM deployment orchestrator
