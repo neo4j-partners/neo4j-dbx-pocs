@@ -61,13 +61,28 @@ The fix requires one of two things. Either the routing table hostnames must reso
 HAProxy itself is not the bottleneck. In TCP passthrough mode, HAProxy forwards raw bytes without inspecting or modifying TLS. Whatever SNI the driver sends in its ClientHello passes through to Aura untouched. Since all routing hostnames resolve to the same Aura edge IP and Aura uses SNI to route to the correct member, the proxy chain works as long as the driver's connection arrives at the proxy in the first place. The question is whether Databricks can be made to send those connections through the tunnel rather than directly to the public internet.
 
 
+## Validated Result
+
+On 2026-03-20, the NCC multi-domain approach was tested on the Application Gateway project. The existing PE rule was updated from one domain (the connection FQDN) to four domains (connection FQDN plus three routing table member hostnames) using the Databricks PATCH API. After five minutes of propagation, a serverless notebook connected with `neo4j+s://` and successfully:
+
+- Fetched the routing table through the tunnel (three routers, two readers, one writer)
+- Connected to routing table member hostnames through the private endpoint
+- Executed read and write queries through the tunnel
+
+The TLS certificate was verified beforehand via `openssl s_client`. Aura uses a wildcard certificate (`*.production-orch-1275.neo4j.io`, Let's Encrypt) that covers all routing table hostnames. The App Gateway L4 TCP listener passes raw bytes without terminating TLS, so the SNI reaches Aura untouched. Verify return code: 0.
+
+This single PE rule update solved both the TLS SNI problem and the routing table hostname resolution problem with zero infrastructure changes.
+
+
 ## Current State of Each Project
 
-**Load Balancer project** (`aurabc-lb-validation`): Working. Validated end-to-end on 2026-03-18. Uses `bolt+s://` through ILB, HAProxy VM, NAT Gateway, and Private Link Service. The architecture is operationally heavy (VM patching, single point of failure, NAT Gateway cost) but stable.
+**Application Gateway project** (`app-gateway-pl`): Working with `neo4j+s://`. Validated end-to-end on 2026-03-20. Uses Application Gateway v2 L4 TCP passthrough with Private Link. No VMs, no HAProxy, no NAT Gateway, no Load Balancer. The gateway handles TCP passthrough and preserves TLS SNI end-to-end. The NCC multi-domain approach enables the `neo4j+s://` protocol with client-side routing through the tunnel. The phased deployment (L7 first for PE validation, then add L4) is required because Azure has not integrated L4 TCP proxy validation with Private Link, but once established the PE continues forwarding without re-validation.
 
-**Application Gateway project** (`app-gateway-pl`): Working with a caveat. Validated end-to-end on 2026-03-20 using a phased deployment workaround. Azure's L4 TCP proxy on Application Gateway v2 and Private Link were developed independently; PE creation only validates L7 HTTP listeners. The workaround deploys a pure L7 gateway first (so PE validation passes), then updates the gateway to add L4 listeners. The established PE continues forwarding traffic without re-validation. This works today but depends on Azure not closing the validation gap. It is not a defensible customer recommendation.
+**Load Balancer project** (`aurabc-lb-validation`): Working with `bolt+s://`. Validated end-to-end on 2026-03-18. Uses ILB, HAProxy VM, NAT Gateway, and Private Link Service. The architecture is operationally heavier (VM patching, single point of failure, NAT Gateway cost). The NCC multi-domain approach should work identically here since NCC sits in front of both architectures, but has not been tested on this project. HAProxy in TCP passthrough mode preserves TLS SNI the same way the App Gateway does.
 
-Both projects share the same constraints: `bolt+s://` only, real Aura FQDN required as the NCC domain, approximately 300 second idle timeout from Private Link, NCC region must match workspace region, and traffic from the proxy to Aura still traverses the public internet.
+The App Gateway architecture is the preferred path because it eliminates the reverse proxy entirely. There are no VMs to maintain, no HAProxy configuration to manage, and no single point of failure at the proxy layer. Azure manages the gateway's availability and scaling. The phased deployment is a one-time setup step, not an ongoing operational concern.
+
+Both projects share the same constraints: real Aura FQDN required as the NCC domain, approximately 300 second idle timeout from Private Link, NCC region must match workspace region, and traffic from the gateway to Aura still traverses the public internet.
 
 
 ## Outstanding Questions
@@ -95,75 +110,30 @@ Both projects share the same constraints: `bolt+s://` only, real Aura FQDN requi
 **For the App Gateway project: will Azure integrate L4 TCP proxy with Private Link?** The L4 TCP proxy is in preview. Private Link is GA. The validation gap exists because these features were built independently. There is no public roadmap indicating when or whether integration will happen.
 
 
-## Options Ranked by Difficulty
+## Validated Solution: NCC Multi-Domain PE Rule
 
-These options apply to the load balancer project. The application gateway project is blocked at a platform level and does not benefit from any of them; it should be set aside until Azure addresses the L4 and Private Link integration gap.
+Adding routing table hostnames to the NCC PE rule's `domain_names` array is the validated solution. A single PE rule supports up to 10 domains. The Aura BC routing table returns three member hostnames plus the connection FQDN, totaling four. The Databricks PATCH API updates domains on an existing PE rule without detaching the NCC.
 
-Each option is evaluated on two criteria: whether it solves the TLS SNI challenge (connections through the tunnel must present the correct SNI for Aura to accept them) and whether it enables client-side routing (the driver can connect to individual cluster members through the routing table).
+**Solves TLS SNI:** Yes. The App Gateway L4 TCP listener (and HAProxy in the LB project) passes raw bytes without terminating TLS. The SNI reaches Aura untouched.
+**Solves routing:** Yes. NCC intercepts DNS for all four domains and routes them through the private endpoint. The driver connects to routing table members through the tunnel.
+**Difficulty:** One API call. Zero infrastructure changes.
 
-### 1. NCC Wildcard Domain Rule
+The `deploy.py update-pe-domains` command automates this: it connects to Aura BC, fetches the routing table, and PATCHes the PE rule with all domains.
 
-Add a wildcard domain rule (e.g. `*.neo4j.io` or `*.production-orch-1275.neo4j.io`) to the NCC private endpoint configuration. All routing table hostnames would match and route through the existing private endpoint to the PLS.
+The remaining open question is hostname stability. The routing table member hostnames encode instance and member identifiers that appear stable for the lifetime of the Aura BC instance. If they change during scaling or maintenance, the `update-pe-domains` command can be re-run. For production, this could be automated on a schedule.
 
-No infrastructure changes. HAProxy already passes through TLS in TCP mode, so the routing hostname SNI reaches Aura untouched. Aura's edge sees the correct member hostname and routes to the right cluster member.
 
-**Solves TLS SNI:** Yes. SNI passes through HAProxy in TCP mode.
-**Solves routing:** Yes. All routing hostnames resolve through the tunnel.
-**Difficulty:** Lowest. One NCC configuration change.
-**Risk:** NCC may not support wildcard domains. No documentation confirms this capability. If it does not, this option is unavailable.
+## Options Not Pursued
 
-### 2. Multiple NCC Domain Rules
+The following options were investigated but not tested because the NCC multi-domain approach solved the problem without requiring them.
 
-Add each routing table hostname as a separate NCC private endpoint rule pointing to the same PLS. Three rules for three members, plus the original connection FQDN rule.
+**NCC Wildcard Domain Rule.** NCC does not support wildcard patterns. The documentation requires fully qualified domain names with exact matching only.
 
-No infrastructure changes. Same SNI passthrough behavior as option 1.
+**Neo4j Driver Custom Resolver.** Research revealed that the Java driver resolver only intercepts the initial seed address, not routing table addresses. The Python driver resolver intercepts routing table router addresses but not reader/writer query connections. The Spark connector exposes no custom resolver interface. Even in the best case, the resolver cannot control the network path for actual query traffic. The NCC multi-domain approach solves DNS interception at the network layer, making the resolver unnecessary.
 
-**Solves TLS SNI:** Yes.
-**Solves routing:** Yes, as long as the rules match the current routing hostnames.
-**Difficulty:** Low. Configuration only.
-**Risk:** The routing table hostnames must be known in advance and must remain stable. If Aura changes the hostnames during maintenance or scaling, the rules go stale and routing breaks silently. The 10-second routing table TTL means the driver checks frequently, but the hostnames themselves should change rarely. This approach is brittle for production but testable immediately.
+**Databricks Serverless Compute Firewall (Preview).** Would eliminate the need for Private Link entirely by providing Databricks outbound IPs for allowlisting. The feature remains in private preview with no access granted despite repeated requests.
 
-### 3. Neo4j Driver Custom Resolver
-
-Configure the Neo4j driver with a custom address resolver that maps all routing table hostnames to the private endpoint IP (or to the connection FQDN, which NCC already routes). The driver would resolve `p-8cc8f63c-365a-0001.production-orch-1275.neo4j.io` to the same address as `8cc8f63c.databases.neo4j.io`, and the connection would flow through the existing NCC rule and tunnel.
-
-The Python driver supports this through the `resolver` parameter on `GraphDatabase.driver()`. The Java driver (used by the Spark connector) has a `ServerAddressResolver` interface. Whether the Neo4j Spark connector exposes this configuration is the open question.
-
-**Solves TLS SNI:** Yes. The resolver overrides address resolution, but the TLS ClientHello still carries the original routing hostname as SNI. HAProxy passes it through.
-**Solves routing:** Yes, if the Spark connector supports it.
-**Difficulty:** Moderate. Requires confirming Spark connector capabilities, and the customer would need to configure this in their driver setup.
-**Risk:** The Spark connector may not expose the resolver interface. Even if it does, the customer takes on the complexity of maintaining the resolver configuration.
-
-### 4. Databricks Serverless Compute Firewall (Preview)
-
-If the serverless compute firewall feature is enabled on the Databricks workspace, it provides a JSON file listing the outbound IP addresses used by serverless compute. Those IPs can be added to the Aura BC allowlist (using the Aura Admin API to keep them in sync). Private Link infrastructure becomes unnecessary. The driver connects directly to Aura BC over the public internet with `neo4j+s://`.
-
-This eliminates the tunnel, the proxy, the load balancer, the NAT gateway, and every constraint associated with them. The `neo4j+s://` protocol works natively because the driver connects to Aura's public endpoint with all routing hostnames resolving normally.
-
-**Solves TLS SNI:** Not applicable. No tunnel, no proxy, no SNI concerns.
-**Solves routing:** Yes. Direct connectivity means the driver's routing table works as designed.
-**Difficulty:** Zero infrastructure work, but the feature must be enabled by Databricks. Multiple requests have gone unanswered.
-**Risk:** The feature is in private preview with no indication of when it becomes generally available. The IP list may be large or may change, requiring automated sync between the Databricks JSON file and the Aura BC allowlist API.
-
-### 5. Aura VDC with Native Private Link
-
-Aura Virtual Dedicated Cloud supports native Azure Private Link. Databricks creates a private endpoint directly to the Aura VDC instance. No proxy, no load balancer, no HAProxy. The `neo4j+s://` protocol works because the private endpoint connects directly to the Neo4j cluster, and routing table hostnames resolve within the private network.
-
-**Solves TLS SNI:** Yes.
-**Solves routing:** Yes.
-**Difficulty:** None technically.
-**Risk:** The customer has stated they do not want to pay for VDC. This remains the cleanest solution if cost constraints change.
-
-### 6. Accept bolt+s:// Limitation
-
-Use the existing validated architecture with `bolt+s://`. No routing table, no read distribution across cluster members, no transparent failover. All queries flow over a single connection to whichever member Aura's edge selects.
-
-For workloads that are write-heavy or that do not require read scaling, this may be sufficient. The architecture is proven, and both projects have validated it end-to-end.
-
-**Solves TLS SNI:** Yes. Single hostname, single connection.
-**Solves routing:** No. This option accepts the limitation rather than solving it.
-**Difficulty:** None. Already working.
-**Risk:** None beyond the inherent limitations of single-endpoint connectivity.
+**Aura VDC with Native Private Link.** The cleanest solution technically, but the customer does not want to pay for VDC.
 
 
 ## Ruled-Out Approaches
@@ -172,9 +142,7 @@ For workloads that are write-heavy or that do not require read scaling, this may
 
 **SNI-based HAProxy routing between bolt and HTTP ports.** This was proposed based on the assumption that `neo4j+s://` needed the HTTP API on port 7473 for routing table discovery. It does not. The ROUTE message is a bolt protocol message sent over the same port 7687 connection. SNI routing between ports is solving a problem that does not exist.
 
-**Application Gateway L4 + Private Link as a customer recommendation.** The phased deployment workaround exploits a validation gap where Azure does not re-validate Private Link configuration on gateway updates. This gap exists because L4 TCP proxy and Private Link were developed independently. Recommending an architecture that depends on Azure not fixing its own validation logic is not defensible.
-
-**Application Gateway L4 + Private Link without phased deployment.** PE creation fails outright. Azure's Private Link validation only inspects L7 HTTP listeners. An L4-only gateway has no listeners that validation recognizes.
+**Load Balancer + HAProxy as the preferred architecture.** The LB project works, but the App Gateway approach eliminates the reverse proxy entirely. No VMs to patch, no HAProxy to configure, no NAT Gateway to maintain, no single point of failure at the proxy layer. The App Gateway is a fully managed Azure service with autoscaling. Both architectures preserve TLS SNI identically (TCP passthrough), and the NCC multi-domain approach works with either. The LB project remains a valid fallback if the App Gateway phased deployment becomes untenable, but the App Gateway is the preferred recommendation.
 
 **Applying Guhan's self-hosted HAProxy pattern directly to Aura BC.** Guhan's demo used a self-hosted Neo4j cluster where he controlled all hostnames, DNS, and certificates. He configured HAProxy backends with round-robin to his own servers, and the routing table returned hostnames he had set up. Aura BC is a managed service. The routing table returns `p-*.production-orch-*.neo4j.io` hostnames that Neo4j controls, in a domain pattern that does not match the connection FQDN. The HAProxy configuration pattern works, but the DNS and hostname control that made it work in Guhan's environment does not translate to Aura BC without solving the NCC hostname resolution problem first.
 

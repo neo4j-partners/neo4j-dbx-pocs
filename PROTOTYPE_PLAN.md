@@ -141,107 +141,24 @@ driver.close()
 If Step 4 succeeds, leave the configuration in place for several days and re-run the routing table inspection periodically. Confirm that the three member hostnames remain stable. If they change during maintenance or scaling events, the PATCH API update would need to be automated, which is feasible but adds operational complexity.
 
 
-### Prototype 2: Python Driver Resolver on Serverless (Supplementary)
+### Prototype 1 Results (Validated 2026-03-20)
 
-This test is worth running even though the resolver alone is insufficient. It establishes whether the Python driver's partial resolver coverage produces useful behavior on serverless, and it provides a fallback data point if the NCC domain approach has unexpected issues.
+Step 0 passed. Aura uses a wildcard certificate `CN=*.production-orch-1275.neo4j.io` (Let's Encrypt, Verify return code: 0). All three routing table hostnames match.
 
-**Step 1: Create a serverless notebook with a custom resolver.**
+Steps 1-3 completed. The `deploy.py update-pe-domains` command fetched the routing table, found three member hostnames, and PATCHed the PE rule from 1 domain to 4 domains. NCC status confirmed ESTABLISHED with all four domains.
 
-```python
-%pip install neo4j
+Step 4 passed. A Databricks serverless notebook connected with `neo4j+s://` through the App Gateway Private Link tunnel. The driver fetched the routing table (3 routers, 2 readers, 1 writer), connected to member hostnames through the private endpoint, and executed queries. TLS SNI was preserved end-to-end through the App Gateway L4 TCP passthrough.
 
-import neo4j
-
-CONNECTION_FQDN = "<connection-fqdn>"
-
-ROUTING_MEMBERS = [
-    "p-8cc8f63c-365a-0001.production-orch-1275.neo4j.io",
-    "p-8cc8f63c-365a-0002.production-orch-1275.neo4j.io",
-    "p-8cc8f63c-365a-0003.production-orch-1275.neo4j.io",
-]
-
-def tunnel_resolver(address):
-    """Resolve all routing table hostnames to the connection FQDN."""
-    host = address[0]
-    if host in ROUTING_MEMBERS or host == CONNECTION_FQDN:
-        yield neo4j.Address((CONNECTION_FQDN, 7687))
-    else:
-        yield address
-
-driver = neo4j.GraphDatabase.driver(
-    f"neo4j+s://{CONNECTION_FQDN}",
-    auth=("neo4j", dbutils.secrets.get(scope="...", key="password")),
-    resolver=tunnel_resolver,
-    max_connection_lifetime=240,
-    liveness_check_timeout=120,
-)
-
-records, summary, keys = driver.execute_query("RETURN 1 AS n")
-print(f"Connected: {summary.server.address}")
-
-driver.close()
-```
-
-**What this tests:** Whether the resolver intercepts the routing table router addresses during table refresh on serverless. Based on Python driver source code analysis, it should. But the resolver will not intercept reader/writer connections for actual queries.
-
-**What success looks like:** The driver connects and can refresh the routing table without errors. Queries execute successfully. However, traffic may still route to the public Aura endpoint for reader/writer connections rather than through the PE tunnel.
-
-**What failure looks like:** The driver errors on routing table refresh because it cannot reach the routers, or because the TLS SNI from the resolver-rewritten address does not match what Aura expects. If the resolver maps all addresses to the connection FQDN, the SNI will be the connection FQDN for all connections, and Aura may or may not route to the correct member.
-
-**Important caveat:** Even if this test "succeeds" (queries return results), the traffic for read/write queries may be flowing over the public internet rather than through the PE tunnel. The resolver does not control the path for those connections. To verify the actual network path, the Aura BC IP allowlist would need to be locked down to only the NAT Gateway IP (or App Gateway IP). If queries still succeed with only the tunnel IP allowlisted, traffic is flowing through the tunnel. If they fail, the reader/writer connections are bypassing the tunnel.
-
-This is why Option 2 (NCC domain rules) is the primary approach. It solves DNS interception at the network layer, covering all connections regardless of driver behavior.
+The NCC multi-domain approach solves both the TLS SNI problem and the routing table hostname resolution problem with a single API call and zero infrastructure changes. The App Gateway architecture is the preferred path because it eliminates the reverse proxy entirely: no VMs, no HAProxy, no NAT Gateway.
 
 
-### Prototype 3: Spark Connector with neo4j+s:// (If Option 2 Succeeds)
+### Prototype 2: Python Driver Resolver on Serverless — Will Not Test
 
-If the NCC domain rule prototype validates, the next step is confirming that the Spark connector also works with `neo4j+s://` through the tunnel. The Spark connector uses the Java driver internally, so its routing behavior may differ from the Python driver test.
+The NCC multi-domain approach validated in Prototype 1 solves DNS interception at the network layer, covering all connections regardless of driver behavior. The driver resolver is unnecessary.
 
-**Step 1: Install the Spark connector on a classic compute cluster.**
-
-The Spark connector cannot be installed on serverless. Use a classic cluster with the Maven coordinates:
-
-```
-org.neo4j:neo4j-connector-apache-spark_2.12:5.4.0_for_spark_3
-```
-
-**Step 2: Read data using neo4j+s:// scheme.**
-
-```python
-df = (spark.read
-    .format("org.neo4j.spark.DataSource")
-    .option("url", "neo4j+s://<connection-fqdn>:7687")
-    .option("authentication.basic.username", "neo4j")
-    .option("authentication.basic.password", dbutils.secrets.get(scope="...", key="password"))
-    .option("connection.max.lifetime.msecs", "240000")
-    .option("connection.liveness.timeout.msecs", "120000")
-    .option("query", "RETURN 1 AS n")
-    .load())
-
-df.show()
-```
-
-**What this tests:** Whether the Spark connector's internal Java driver can connect with `neo4j+s://` and route queries through the tunnel when NCC domain rules cover the routing table hostnames. The Java driver resolver does not intercept routing table addresses, but it does not need to if NCC handles DNS interception at the network level.
-
-**What success looks like:** The DataFrame loads successfully. The Java driver fetches the routing table, resolves member hostnames through NCC (which intercepts DNS for all four domains), and connects through the PE tunnel. Queries execute against cluster members.
-
-**Limitation:** This test requires a classic compute cluster, not serverless. NCC PE rules apply to both classic and serverless, but the NCC must be attached to the workspace and the cluster must be in the same region. Classic clusters with NCC may behave differently from serverless in terms of DNS interception. If this is a concern, the test can be deferred until the serverless Python driver test (Prototype 1) validates the NCC approach.
-
-**Alternative for serverless:** Use the Spark connector's built-in multi-URL feature to specify all routing members explicitly:
-
-```python
-url = "neo4j+s://<connection-fqdn>:7687,neo4j+s://p-8cc8f63c-365a-0001.production-orch-1275.neo4j.io:7687,neo4j+s://p-8cc8f63c-365a-0002.production-orch-1275.neo4j.io:7687,neo4j+s://p-8cc8f63c-365a-0003.production-orch-1275.neo4j.io:7687"
-```
-
-This passes the member addresses as static resolvers via the connector's comma-separated URL parsing. The Java driver would use these for initial connection bootstrapping. Combined with NCC domain rules handling DNS for all hostnames, this may provide additional resilience.
+Research confirmed the resolver is insufficient as a standalone solution: the Java driver resolver does not intercept routing table addresses, the Python driver resolver does not intercept reader/writer query connections, and the Spark connector exposes no custom resolver interface.
 
 
-## Execution Order
+### Prototype 3: Spark Connector with neo4j+s:// — Will Not Test
 
-1. **Run Prototype 1 (NCC domain rules) first.** It requires no code, no infrastructure changes, and no new dependencies. It is a PATCH API call, a five-minute wait, and a notebook test. If it works, it answers the primary question: can `neo4j+s://` work through the existing private link tunnel by adding routing table hostnames to the NCC PE rule?
-
-2. **Run Prototype 2 (Python resolver) in parallel if desired.** It is a notebook-only test that can run alongside Prototype 1. It provides data on driver resolver behavior on serverless regardless of the NCC outcome.
-
-3. **Run Prototype 3 (Spark connector) only if Prototype 1 succeeds.** There is no point testing the Spark connector until the NCC domain approach is validated. The Spark connector test confirms that the Java driver path also works, which matters for production workloads that use Spark DataFrames rather than raw driver calls.
-
-Use the App Gateway infrastructure for all three prototypes since it is currently deployed. If the NCC domain approach validates, repeat the Prototype 1 test on the LB project to confirm identical behavior before making a customer recommendation.
+The NCC multi-domain approach works at the DNS layer, which means it applies to any driver implementation (Python, Java, Spark connector) without driver-specific configuration. The Spark connector test was contingent on Prototype 1 succeeding. Since it succeeded, the Spark connector should work identically because NCC intercepts DNS for all four domains before the driver is involved. This can be confirmed in a production integration test rather than a separate prototype.
