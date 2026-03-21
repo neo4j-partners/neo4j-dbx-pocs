@@ -1,0 +1,16 @@
+# Glossary
+
+- **Aura BC (Aura Business Critical):** Neo4j's fully managed graph database tier. Runs in Neo4j's own Azure subscription. Supports IP allowlisting but not native Private Link (that requires Aura VDC).
+- **Aura VDC (Virtual Dedicated Cloud):** Neo4j's highest tier with native Private Link support, eliminating the need for the intermediary architectures in this repo.
+- **Bolt:** The binary protocol Neo4j uses for client-to-server communication on port 7687. `bolt+s://` is Bolt over TLS in direct mode (one connection, one server). `neo4j+s://` is Bolt over TLS with routing (the driver discovers cluster members and opens multiple connections).
+- **FQDN (Fully Qualified Domain Name):** The complete hostname of a service, e.g., `f5919d06.databases.neo4j.io`.
+- **HAProxy:** Open-source software that acts as a TCP/HTTP proxy. Used in the LB approach as a reverse proxy VM that forwards Bolt traffic from the load balancer to Aura BC.
+- **L4 / L7 (Layer 4 / Layer 7):** Networking layers. L4 (transport) works with raw TCP connections without inspecting the content. L7 (application) understands HTTP and can make routing decisions based on URLs, headers, etc. Both approaches here operate at L4 because Bolt is not HTTP.
+- **NAT Gateway:** An Azure resource that gives VMs a static public IP for outbound internet traffic. Needed in the LB approach so that the proxy VM's outbound IP is predictable and can be added to Aura BC's IP allowlist.
+- **NCC (Network Connectivity Configuration):** A Databricks account-level resource that controls how serverless compute connects to external services. Private endpoint rules inside an NCC route traffic through Private Link instead of the public internet.
+- **PLS (Private Link Service):** An Azure resource that accepts incoming Private Endpoint connections and forwards them to a load balancer or application gateway. It is the "receiving end" of a Private Link connection.
+- **Private Endpoint (PE):** A private IP address in a VNet that connects to a Private Link Service. Traffic between the PE and PLS stays on the Azure backbone network, never touching the public internet. Databricks NCC creates these automatically when you add a private endpoint rule.
+- **Private Link:** Azure's mechanism for creating private, backbone-only connections between resources. Traffic between a Private Endpoint and a Private Link Service never leaves the Azure network. Not the same as a VPN or VNet peering.
+- **SNI (Server Name Indication):** A TLS extension where the client tells the server which hostname it wants to connect to during the TLS handshake, before encryption starts. Aura BC uses SNI to route connections to the correct database instance. If a proxy or gateway strips or changes the SNI value, Aura BC rejects the connection.
+- **TLS (Transport Layer Security):** Encryption protocol that secures data in transit. Both `bolt+s://` and `neo4j+s://` use TLS. The key concern in these architectures is whether intermediaries preserve the original TLS handshake or terminate and re-establish it.
+- **VNet (Virtual Network):** An Azure virtual network. A private, isolated network segment in Azure where you deploy VMs, load balancers, and other resources. Resources inside a VNet can talk to each other over private IPs.

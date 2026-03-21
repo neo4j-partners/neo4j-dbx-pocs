@@ -1,8 +1,11 @@
+
 # neo4j-dbx-pocs
 
-Proof-of-concept architectures for connecting Azure Databricks serverless compute to Neo4j Aura Business Critical over Azure Private Link.
+Proof-of-concept architecture for connecting Azure Databricks serverless compute to Neo4j Aura Business Critical over Azure Private Link.
 
 ## The Validated Solution: Application Gateway with Private Link
+
+![Architecture Diagram](app-gateway-pl/architecture.png)
 
 The [`app-gateway-pl/`](app-gateway-pl/) project is the validated and preferred approach. It uses Azure Application Gateway v2 as an L4 TCP proxy with Private Link to establish private connectivity from Databricks serverless compute to Neo4j Aura Business Critical. The architecture is fully managed: no VMs, no reverse proxies, no NAT Gateway.
 
@@ -27,6 +30,28 @@ Neo4j Aura Business Critical
 ```
 
 See [`app-gateway-pl/README.md`](app-gateway-pl/README.md) for deployment instructions and [`app-gateway-pl/ARCHITECTURE.md`](app-gateway-pl/ARCHITECTURE.md) for the full technical explanation.
+
+## Preserving the Neo4j Protocol
+
+A key goal of this architecture is preserving the full `neo4j+s://` routing protocol through the Private Link tunnel, not just establishing basic connectivity.
+
+Neo4j's `neo4j+s://` protocol goes beyond a simple database connection. After the initial handshake, the driver discovers the cluster topology by fetching a routing table containing individual member hostnames for routers, readers, and writers. It then opens separate connections to each member, directing write queries to the leader and read queries to followers. This gives the client automatic read/write splitting, load distribution across cluster members, and failover if a member becomes unavailable.
+
+Preserving this protocol through the Private Link tunnel delivers three advantages over a single-connection approach:
+
+- **Read/write splitting.** The driver routes read queries to follower replicas and writes to the leader. This distributes load across the cluster rather than concentrating all traffic on one member.
+- **Cluster-aware failover.** If a cluster member becomes unavailable, the driver refreshes its routing table and redirects traffic to healthy members without application-level intervention.
+- **Load distribution.** Multiple reader connections spread query load across followers, reducing pressure on the leader and improving throughput for read-heavy workloads.
+
+Plain `bolt+s://` can also be used with less complexity. It requires only the connection FQDN in the NCC PE rule (one domain instead of four) and skips routing table discovery entirely. This is simpler to configure and avoids any concern about routing table hostname stability, but all queries go to a single server with no client-side routing, no read/write splitting, and no automatic failover.
+
+Both protocols were validated end-to-end through the Private Link tunnel on 2026-03-20. In both cases, the Application Gateway's L4 TCP passthrough preserves TLS SNI from the Neo4j driver all the way to Aura BC's ingress, where it is used to route the connection to the correct database instance and cluster member.
+
+## Operational Monitoring
+
+The architecture depends on external state it does not control: the hostnames in Aura BC's routing table, the NCC private endpoint connection state, and the TLS certificate Aura serves on its shared ingress. Any of these can change without warning, and when they do, the failure mode is silent — connections time out or get rejected with no alarm.
+
+A lightweight Azure Function running on a timer trigger can monitor these dependencies, automatically sync routing table hostname drift via the existing `deploy.py update-pe-domains` logic, and alert when manual intervention is required. See [`app-gateway-pl/AZURE_FUNCTION.md`](app-gateway-pl/AZURE_FUNCTION.md) for the full proposal. This has not been implemented, however it should be trivial given that the monitoring checks reuse the same Aura and Databricks API patterns already proven in the deployment scripts.
 
 ## Next Step: Direct Databricks Serverless IP Allowlisting
 
@@ -55,29 +80,8 @@ Beyond performance, the operational difference is significant. The load balancer
 
 ## Approaches That Did Not Work
 
-Several alternative architectures were investigated and ruled out during this project.
-
-**Dual load balancers splitting traffic by port.** Based on the assumption that `neo4j+s://` routing table discovery used the HTTP API on port 7473 in addition to Bolt on port 7687. Investigation revealed that the routing table is fetched entirely over the Bolt protocol on port 7687. Port 7473 is not involved. Splitting traffic by port added infrastructure without addressing the actual hostname resolution problem.
-
-**SNI-based reverse proxy port routing.** Proposed using HAProxy's SNI inspection to route traffic between Bolt and HTTP ports based on the TLS hostname. Built on the same incorrect port assumption as the dual load balancer approach. Since the ROUTE message is a Bolt protocol message on port 7687, SNI-based port routing was addressing a non-existent problem.
-
-**Self-hosted reverse proxy pattern applied to a managed service.** A demonstration with a self-hosted Neo4j cluster showed `neo4j+s://` working through an HAProxy reverse proxy. That setup relied on controlling all hostnames, DNS records, and certificates, and could configure HAProxy backends to match the routing table entries. Aura BC is a managed service where the routing table returns hostnames in a different domain from the connection FQDN, and the customer has no control over DNS or certificates. The proxy mechanism works, but the hostname control that made the self-hosted pattern viable does not exist with Aura BC.
-
-**NCC wildcard domain rules.** NCC private endpoint rules do not support wildcard patterns. Only exact FQDNs are accepted. A wildcard matching all routing table hostnames would have been the simplest solution, but the API rejects non-FQDN values.
-
-**Neo4j driver custom resolver.** The Java driver resolver only intercepts the initial seed address, not routing table member addresses. The Python driver resolver covers routing table contacts but not reader/writer query connections. The Spark connector exposes no resolver interface. None provided sufficient coverage to redirect all traffic through the tunnel.
+Several alternative architectures were investigated and ruled out during this project. See [`docs/alternatives.md`](docs/alternatives.md) for full details on each approach and why it was set aside.
 
 ## Glossary
 
-- **Aura BC (Aura Business Critical):** Neo4j's fully managed graph database tier. Runs in Neo4j's own Azure subscription. Supports IP allowlisting but not native Private Link (that requires Aura VDC).
-- **Aura VDC (Virtual Dedicated Cloud):** Neo4j's highest tier with native Private Link support, eliminating the need for the intermediary architectures in this repo.
-- **Bolt:** The binary protocol Neo4j uses for client-to-server communication on port 7687. `bolt+s://` is Bolt over TLS in direct mode (one connection, one server). `neo4j+s://` is Bolt over TLS with routing (the driver discovers cluster members and opens multiple connections).
-- **FQDN (Fully Qualified Domain Name):** The complete hostname of a service, e.g., `f5919d06.databases.neo4j.io`.
-- **L4 / L7 (Layer 4 / Layer 7):** Networking layers. L4 (transport) works with raw TCP connections. L7 (application) understands HTTP. Both approaches here operate at L4 because Bolt is not HTTP.
-- **NCC (Network Connectivity Configuration):** A Databricks account-level resource that controls how serverless compute connects to external services. Private endpoint rules inside an NCC route traffic through Private Link.
-- **PLS (Private Link Service):** An Azure resource that accepts incoming Private Endpoint connections and forwards them to a load balancer or application gateway.
-- **Private Endpoint (PE):** A private IP address in a VNet that connects to a Private Link Service. Traffic stays on the Azure backbone.
-- **Private Link:** Azure's mechanism for private, backbone-only connections between resources.
-- **SNI (Server Name Indication):** A TLS extension where the client declares the target hostname during the handshake, before encryption begins. Aura BC uses SNI to route connections to the correct database instance.
-- **TLS (Transport Layer Security):** Encryption protocol securing data in transit. The key concern in these architectures is whether intermediaries preserve the original TLS handshake or terminate and re-establish it.
-- **VNet (Virtual Network):** An Azure virtual network where resources are deployed and communicate over private IPs.
+See [`docs/glossary.md`](docs/glossary.md) for definitions of all terms and acronyms used across this project.

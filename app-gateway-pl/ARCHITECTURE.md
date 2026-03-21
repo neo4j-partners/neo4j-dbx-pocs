@@ -38,7 +38,7 @@ Three facts about these hostnames matter.
 
 First, they are in a completely different domain from the connection FQDN. The client connects to `*.databases.neo4j.io`, but the routing table returns `*.production-orch-*.neo4j.io`. These are not subdomains of each other.
 
-Second, all routing table hostnames resolve to the same IP address as the connection FQDN. Aura routes all cluster member traffic through the same edge endpoint and uses TLS SNI to distinguish between members. The different hostnames are routing labels, not different servers at different addresses.
+Second, all routing table hostnames resolve to the same IP address as the connection FQDN. At the DNS and network level, the different hostnames are routing labels, not different servers at different addresses. However, this does not mean the routing is meaningless. Aura's ingress layer reads the SNI from each incoming TLS connection and routes it to the specific cluster member that hostname represents. Connections with the `p-*-0001` SNI reach the writer (leader), while connections with `p-*-0002` or `p-*-0003` reach the readers (followers). The single IP is a shared front door; the actual routing to distinct backend members happens inside Aura based on the SNI value. This is why L4 TCP passthrough matters beyond just identifying the database instance: the SNI also determines which cluster member handles the connection.
 
 Third, the routing table is fetched over Bolt on port 7687, not the HTTP API on port 7473. Earlier analysis incorrectly assumed routing table discovery required the HTTP API. This led to several dead-end approaches involving port splitting before the actual mechanism was identified.
 
@@ -112,15 +112,9 @@ The solution to routing table hostname resolution is a single NCC private endpoi
 
 A Databricks NCC PE rule accepts up to 10 entries in its `domain_names` array. NCC intercepts DNS lookups for every listed domain and routes the resulting connections through the private endpoint. By listing both the connection FQDN and all three routing table member hostnames (four domains total), every connection the Neo4j driver makes is routed through the Private Link tunnel, whether that connection is to the initial server or to a routing table member.
 
-The update is a single PATCH API call:
+The `deploy.py create-pe-rule` command handles this automatically during initial setup: it connects to Aura BC, fetches the routing table, extracts the member hostnames, and creates the PE rule with all four domains in a single POST call.
 
-```
-PATCH /api/2.0/accounts/{ACCOUNT_ID}/network-connectivity-configs/{NCC_ID}/private-endpoint-rules/{RULE_ID}?update_mask=domain_names
-```
-
-The NCC does not need to be detached from the workspace. Changes propagate in approximately five minutes. Running serverless compute should be restarted afterward to pick up the new DNS routing.
-
-The `deploy.py update-pe-domains` command automates this: it connects to Aura BC, fetches the routing table, extracts the member hostnames, and PATCHes the PE rule with all four domains.
+If routing table hostnames change later (during Aura maintenance or scaling), the `deploy.py update-pe-domains` command syncs the PE rule with the current routing table via a PATCH call. The NCC does not need to be detached from the workspace. Changes propagate in approximately five minutes. Running serverless compute should be restarted afterward to pick up the new DNS routing.
 
 ### Why This Works End-to-End
 
@@ -134,7 +128,7 @@ The multi-domain PE rule solves two problems simultaneously:
 
 TLS certificates were verified first via `openssl s_client` against each routing table hostname as the SNI. Aura's wildcard certificate covered all three members with `Verify return code: 0 (ok)`.
 
-The PE rule was updated from one domain to four using `deploy.py update-pe-domains`. After five minutes of propagation, a Databricks serverless notebook connected with `neo4j+s://` through the full Private Link chain:
+The PE rule was created with all four domains (connection FQDN plus three routing table members). After five minutes of propagation, a Databricks serverless notebook connected with `neo4j+s://` through the full Private Link chain:
 
 - The driver fetched the routing table (three routers, two readers, one writer)
 - Connections to routing table member hostnames were routed through the private endpoint
@@ -165,21 +159,39 @@ The Private Link configuration is present and correctly bound. The failure is a 
 
 This is a one-time setup step, not an ongoing operational concern. Once the private endpoint is established, the gateway can be updated freely without re-triggering PL validation. The Bicep templates in `infra/main-phase1.bicep` and `infra/main-phase2.bicep` encode this split, and `setup_azure.py` orchestrates the two phases.
 
-## Protocol Support
+## bolt+s:// vs neo4j+s://
 
-With the NCC multi-domain PE rule in place, both Neo4j connection protocols work through the tunnel:
+Both Neo4j connection protocols work through this architecture. They differ in complexity, capabilities, and what they require from the NCC configuration.
 
-**`neo4j+s://` (routing protocol)** is the standard Neo4j connection scheme. The driver discovers cluster members via the routing table and distributes queries across readers and writers. With all routing table hostnames in the PE rule, every connection is routed through the private endpoint. This enables client-side routing, read/write splitting, and automatic failover across cluster members.
+### bolt+s:// (Direct Mode)
 
-**`bolt+s://` (direct protocol)** establishes a single connection to a single server with no routing table discovery. It works with a single-domain PE rule (just the connection FQDN). This mode sacrifices client-side routing and failover but is simpler to configure and was the only option before the multi-domain PE rule was validated.
+The `bolt+s://` scheme establishes a single TLS connection to the server identified by the connection FQDN. The driver sends all queries over this one connection. There is no ROUTE message, no routing table discovery, and no additional connections to cluster members.
 
-For production workloads, `neo4j+s://` with the multi-domain PE rule is the recommended configuration because it provides the full Neo4j protocol feature set.
+From a Private Link perspective, this is the simpler configuration. The NCC PE rule needs only one domain (the connection FQDN). TLS SNI is preserved through the L4 TCP passthrough, and Aura identifies the correct database instance from the SNI. The connection lands on whichever cluster member Aura's ingress assigns based on the connection FQDN.
+
+What `bolt+s://` gives up: the driver has no awareness of the cluster topology. All queries, reads and writes alike, go to the same server over the same connection. There is no client-side read/write splitting, no load distribution across cluster members, and no automatic failover. If the connection drops, the driver must reconnect through the same FQDN.
+
+### neo4j+s:// (Routing Mode)
+
+The `neo4j+s://` scheme starts with the same initial connection but then sends a ROUTE message to fetch the cluster's routing table. The driver learns which members are routers, readers, and writers, and opens separate connections to each using their individual hostnames as the TLS SNI.
+
+Because all routing table hostnames resolve to the same IP address, the routing may appear superficial at the network level. It is not. Aura's ingress layer reads the SNI on each connection and routes it to the specific cluster member that hostname represents. Connections with the writer's hostname reach the leader; connections with reader hostnames reach followers. The driver then directs write queries to the writer connection and read queries to reader connections, distributing load across the cluster.
+
+This requires the NCC PE rule to contain all four domains (connection FQDN plus three routing table member hostnames). Without them, the driver resolves routing table hostnames via public DNS and connections bypass the tunnel.
+
+### When Each Makes Sense
+
+**`bolt+s://` is the right choice when simplicity matters more than cluster-level features.** A Databricks notebook running batch analytics, periodic ETL writes, or ad-hoc graph queries against Aura BC is typically issuing sequential operations from a single compute context. Read/write splitting provides no benefit when there is one caller making one type of query at a time. The simpler PE rule configuration and the absence of routing table hostname stability concerns make `bolt+s://` the lower-maintenance option.
+
+**`neo4j+s://` is the right choice when the workload benefits from cluster topology awareness.** Applications with concurrent readers and writers, long-running services that need automatic failover if a cluster member becomes unavailable, or workloads where distributing reads across followers meaningfully reduces leader load all benefit from the routing protocol. The added NCC configuration complexity (four domains instead of one, potential hostname updates if the cluster changes) is justified by the operational capabilities.
+
+For most Databricks serverless workloads, `bolt+s://` with a single-domain PE rule is likely sufficient. The multi-domain `neo4j+s://` configuration was validated to confirm it is possible and to provide the option when workload requirements demand it.
 
 ## Constraints
 
 | Constraint | Detail |
 |------------|--------|
-| Multi-domain PE rule required for `neo4j+s://` | The routing table member hostnames must be included in the NCC PE rule's `domain_names` array. Without them, routing table connections bypass the tunnel. Use `deploy.py update-pe-domains` to automate. For `bolt+s://` (direct mode, no routing), only the connection FQDN is needed. |
+| Multi-domain PE rule required for `neo4j+s://` | The routing table member hostnames must be included in the NCC PE rule's `domain_names` array. Without them, routing table connections bypass the tunnel. `deploy.py create-pe-rule` includes them automatically at setup. If hostnames drift, run `deploy.py update-pe-domains` to resync. For `bolt+s://` (direct mode, no routing), only the connection FQDN is needed. |
 | Real Aura FQDN required as NCC domain | Databricks uses each PE rule domain as the TLS SNI hostname. Aura BC rejects connections where the SNI does not match its certificate. Custom private domains do not work. |
 | ~300s idle timeout | Azure Private Link enforces an idle timeout of approximately five minutes. The Neo4j driver must set `max_connection_lifetime` and `liveness_check_timeout` below 300 seconds to prevent silent connection drops. |
 | NCC region must match workspace region | The NCC must be created in the same Azure region as the Databricks workspace. The Application Gateway can be in a different region. |
@@ -187,77 +199,3 @@ For production workloads, `neo4j+s://` with the multi-domain PE rule is the reco
 | Public internet leg remains | Traffic from the Application Gateway to Aura BC traverses the public internet over TLS. Only Aura VDC with native Azure Private Link eliminates this hop entirely. |
 | Routing table hostname stability | The routing table member hostnames appear stable across the lifetime of an Aura BC instance but could change during scaling or maintenance events. If they change, re-run `deploy.py update-pe-domains`. For production, consider automating this on a schedule. |
 
-## Alternatives Evaluated
-
-Several approaches were investigated before arriving at the Application Gateway architecture. Each is documented here with the reason it was set aside.
-
-### Load Balancer with HAProxy Reverse Proxy
-
-**Status:** Works, but not preferred.
-
-This approach deploys an Internal Load Balancer fronted by a Private Link Service, with an HAProxy VM forwarding Bolt traffic to Aura BC via a NAT Gateway. It was validated end-to-end with `bolt+s://`.
-
-The Application Gateway approach is preferred because it eliminates the reverse proxy entirely. The LB architecture requires four components (ILB, PLS, HAProxy VM, NAT Gateway) where the Application Gateway requires one managed resource. The VM introduces a single point of failure, ongoing patching and monitoring requirements, and kernel-level packet forwarding overhead. The NAT Gateway adds cost for a static outbound IP. The Application Gateway provides load balancing, traffic forwarding, and a static outbound IP natively. Traffic traverses fewer network hops, which yields lower end-to-end latency.
-
-The LB architecture remains a valid fallback if the Application Gateway phased deployment is incompatible with a customer's change management process. The NCC multi-domain PE rule should work identically with either architecture since NCC sits in front of both, though it has only been validated on the Application Gateway path.
-
-### Dual Load Balancers Splitting by Port
-
-**Status:** Not viable.
-
-This approach proposed splitting Bolt traffic (port 7687) and HTTP API traffic (port 7473) across two separate load balancers. The reasoning was that `neo4j+s://` routing table discovery used the HTTP API on a separate port. Investigation revealed that the routing table is fetched over the Bolt protocol on port 7687, not the HTTP API. Port 7473 is not involved in `neo4j+s://` routing behavior. Two load balancers carrying the same port to the same destination would add cost and complexity without solving the hostname resolution problem.
-
-### SNI-Based Reverse Proxy Port Routing
-
-**Status:** Not viable.
-
-This approach proposed using HAProxy's SNI inspection to route traffic between Bolt and HTTP ports based on the TLS hostname. It was based on the same incorrect assumption as the dual load balancer approach: that routing table discovery required the HTTP API on port 7473. Since the ROUTE message is a Bolt protocol message on port 7687, SNI-based port routing was addressing a non-existent problem.
-
-### Self-Hosted Reverse Proxy Pattern Applied to Managed Service
-
-**Status:** Not transferable.
-
-A demonstration with a self-hosted Neo4j cluster showed `neo4j+s://` working through an HAProxy reverse proxy with round-robin backend routing. That setup worked because the operator controlled all hostnames, DNS records, and certificates, and could configure HAProxy backends to match the routing table entries.
-
-Aura BC is a managed service. The routing table returns hostnames in a domain the customer does not control (`*.production-orch-*.neo4j.io`), and these hostnames differ from the connection FQDN (`*.databases.neo4j.io`). The proxy mechanism works identically in TCP passthrough mode, but the DNS and hostname control that made the self-hosted pattern viable does not exist with a managed service. The NCC multi-domain PE rule solves this at the network layer instead.
-
-### Direct Databricks Serverless IP Allowlisting
-
-**Status:** Not viable without preview feature access.
-
-Databricks serverless compute does not expose stable outbound IP addresses. The IP pool changes as compute scales. A serverless compute firewall preview feature exists that would provide the actual outbound IP list for allowlisting on Aura BC, eliminating the need for Private Link entirely. Access to this feature has not been granted.
-
-### NCC Wildcard Domain Rules
-
-**Status:** Not supported by NCC.
-
-NCC does not support wildcard patterns in PE rule domain names. Only exact FQDNs are accepted. A wildcard rule like `*.production-orch-*.neo4j.io` would have matched all routing table hostnames with a single entry, but the NCC API rejects non-FQDN values. The multi-domain PE rule (explicit listing of all FQDNs) is the working alternative.
-
-### Neo4j Driver Custom Resolver
-
-**Status:** Insufficient coverage.
-
-The Neo4j driver offers a custom resolver interface that can override hostname resolution. Investigation revealed that no driver implementation intercepts the full connection lifecycle:
-
-- The Java driver resolver only intercepts the initial seed address. Routing table addresses bypass the resolver entirely.
-- The Python driver resolver intercepts routing table router contacts but not reader/writer query connections.
-- The Spark connector exposes no custom resolver interface.
-
-Even in the best case, the resolver cannot control the network path for actual query traffic to cluster members. The NCC multi-domain approach solves DNS interception at the network layer, making driver-level resolution unnecessary.
-
-## Glossary
-
-- **Aura BC (Aura Business Critical):** Neo4j's fully managed graph database tier. Runs in Neo4j's own Azure subscription. Supports IP allowlisting but not native Private Link (that requires Aura VDC).
-- **Aura VDC (Virtual Dedicated Cloud):** Neo4j's highest tier with native Private Link support, eliminating the need for the intermediary architectures in this repo.
-- **Bolt:** The binary protocol Neo4j uses for client-to-server communication on port 7687. `bolt+s://` is Bolt over TLS in direct mode (one connection, one server). `neo4j+s://` is Bolt over TLS with routing (the driver discovers cluster members and opens multiple connections).
-- **FQDN (Fully Qualified Domain Name):** The complete hostname of a service, e.g., `f5919d06.databases.neo4j.io`.
-- **HAProxy:** Open-source software that acts as a TCP/HTTP proxy. Used in the LB approach as a reverse proxy VM that forwards Bolt traffic from the load balancer to Aura BC.
-- **L4 / L7 (Layer 4 / Layer 7):** Networking layers. L4 (transport) works with raw TCP connections without inspecting the content. L7 (application) understands HTTP and can make routing decisions based on URLs, headers, etc. Both approaches here operate at L4 because Bolt is not HTTP.
-- **NAT Gateway:** An Azure resource that gives VMs a static public IP for outbound internet traffic. Needed in the LB approach so that the proxy VM's outbound IP is predictable and can be added to Aura BC's IP allowlist.
-- **NCC (Network Connectivity Configuration):** A Databricks account-level resource that controls how serverless compute connects to external services. Private endpoint rules inside an NCC route traffic through Private Link instead of the public internet.
-- **PLS (Private Link Service):** An Azure resource that accepts incoming Private Endpoint connections and forwards them to a load balancer or application gateway. It is the "receiving end" of a Private Link connection.
-- **Private Endpoint (PE):** A private IP address in a VNet that connects to a Private Link Service. Traffic between the PE and PLS stays on the Azure backbone network, never touching the public internet. Databricks NCC creates these automatically when you add a private endpoint rule.
-- **Private Link:** Azure's mechanism for creating private, backbone-only connections between resources. Traffic between a Private Endpoint and a Private Link Service never leaves the Azure network. Not the same as a VPN or VNet peering.
-- **SNI (Server Name Indication):** A TLS extension where the client tells the server which hostname it wants to connect to during the TLS handshake, before encryption starts. Aura BC uses SNI to route connections to the correct database instance. If a proxy or gateway strips or changes the SNI value, Aura BC rejects the connection.
-- **TLS (Transport Layer Security):** Encryption protocol that secures data in transit. Both `bolt+s://` and `neo4j+s://` use TLS. The key concern in these architectures is whether intermediaries preserve the original TLS handshake or terminate and re-establish it.
-- **VNet (Virtual Network):** An Azure virtual network. A private, isolated network segment in Azure where you deploy VMs, load balancers, and other resources. Resources inside a VNet can talk to each other over private IPs.

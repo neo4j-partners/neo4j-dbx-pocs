@@ -11,7 +11,7 @@ Commands:
     uv run python deploy.py approve           — Approve pending private endpoint connections
     uv run python deploy.py attach-ncc        — Attach NCC to a Databricks workspace
     uv run python deploy.py setup-secrets     — Store Neo4j credentials in Databricks secrets
-    uv run python deploy.py update-pe-domains — Add routing table hostnames to PE rule (neo4j+s://)
+    uv run python deploy.py update-pe-domains — Sync PE rule domains with current routing table
     uv run python deploy.py detach-ncc        — Detach and delete NCC from Databricks
     uv run python deploy.py cleanup       — Tear down all infrastructure
 """
@@ -338,6 +338,45 @@ def parse_profile_arg():
     return None
 
 
+def fetch_routing_hostnames():
+    """Connect to Aura BC and return the set of routing table member hostnames.
+
+    Returns None if the connection fails (caller decides how to handle).
+    """
+    from urllib.parse import urlparse
+    from neo4j import GraphDatabase
+
+    neo4j_uri = os.getenv("NEO4J_URI", "")
+    neo4j_user = os.getenv("NEO4J_USERNAME", "")
+    neo4j_password = os.getenv("NEO4J_PASSWORD", "")
+
+    if not all([neo4j_uri, neo4j_user, neo4j_password]):
+        return None
+
+    hostname = urlparse(neo4j_uri).hostname
+    if not hostname:
+        return None
+
+    try:
+        driver = GraphDatabase.driver(
+            f"neo4j+s://{hostname}",
+            auth=(neo4j_user, neo4j_password),
+        )
+        driver.execute_query("RETURN 1 AS n")
+
+        hostnames = set()
+        pool = driver._pool
+        if hasattr(pool, "routing_tables"):
+            for db, table in pool.routing_tables.items():
+                for role in ("routers", "readers", "writers"):
+                    for addr in getattr(table, role, []):
+                        hostnames.add(addr[0])
+        driver.close()
+        return hostnames if hostnames else None
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Databricks NCC commands
 # ---------------------------------------------------------------------------
@@ -382,12 +421,16 @@ def cmd_create_ncc():
 
 
 def cmd_create_pe_rule():
-    """Create a private endpoint rule in the NCC.
+    """Create a private endpoint rule in the NCC with all routing table domains.
+
+    Connects to Aura BC to fetch the routing table and includes all member
+    hostnames alongside the connection FQDN. This enables both bolt+s:// and
+    neo4j+s:// protocols from the start.
 
     For Application Gateway, the Databricks API requires:
     - resource_id: the Application Gateway resource ID
     - group_id: the Private Link configuration name
-    - domain_names: the Neo4j domain for DNS resolution
+    - domain_names: connection FQDN + routing table member hostnames
     """
     print("=" * 60)
     print("CREATE PRIVATE ENDPOINT RULE")
@@ -415,11 +458,31 @@ def cmd_create_pe_rule():
         print("  Re-run 'uv run python setup_azure.py phase1' to regenerate azure-resources.json")
         sys.exit(1)
 
+    # Fetch routing table hostnames from Aura BC
+    print("\n  Fetching routing table from Aura BC...")
+    routing_hostnames = fetch_routing_hostnames()
+
+    if routing_hostnames:
+        all_domains = sorted({domain} | routing_hostnames)
+        print(f"  Routing members found: {len(routing_hostnames)}")
+        for h in sorted(routing_hostnames):
+            print(f"    {h}")
+        if len(all_domains) > 10:
+            print(f"  WARNING: {len(all_domains)} domains exceeds NCC limit of 10. Using connection FQDN only.")
+            all_domains = [domain]
+    else:
+        print("  WARNING: Could not fetch routing table. Creating rule with connection FQDN only.")
+        print("  Run 'deploy.py update-pe-domains' after PE is ESTABLISHED to add routing hostnames.")
+        all_domains = [domain]
+
     print(f"\n  Account ID:    {account_id}")
     print(f"  NCC ID:        {ncc_id}")
     print(f"  App GW ID:     {appgw_resource_id}")
     print(f"  Group ID:      {frontend_ip_config_name}")
-    print(f"  Domain:        {domain}")
+    print(f"  Domains ({len(all_domains)}):")
+    for d in all_domains:
+        label = "(connection FQDN)" if d == domain else "(routing member)"
+        print(f"    {d}  {label}")
 
     url = (
         f"{DATABRICKS_BASE_URL}/{account_id}/network-connectivity-configs/"
@@ -428,7 +491,7 @@ def cmd_create_pe_rule():
     response = databricks_api("POST", url, token, {
         "resource_id": appgw_resource_id,
         "group_id": frontend_ip_config_name,
-        "domain_names": [domain],
+        "domain_names": all_domains,
     })
 
     rule_id = response.get("rule_id", "")
@@ -706,57 +769,28 @@ def cmd_ncc_status():
 
 
 def cmd_update_pe_domains():
-    """Update NCC PE rule with routing table hostnames to enable neo4j+s:// protocol.
+    """Sync NCC PE rule domains with current routing table hostnames.
 
-    Connects to Aura BC, fetches the routing table to discover cluster member
-    hostnames, then PATCHes the NCC PE rule's domain_names to include all of them
-    alongside the connection FQDN. This allows NCC to intercept DNS for routing
-    table hostnames and route them through the private endpoint.
+    Maintenance command for keeping the PE rule in sync if Aura BC reassigns
+    routing table member hostnames. During initial setup, create-pe-rule
+    includes all domains automatically.
     """
     print("=" * 60)
-    print("UPDATE PE RULE DOMAINS (neo4j+s:// prototype)")
+    print("SYNC PE RULE DOMAINS WITH ROUTING TABLE")
     print("=" * 60)
-
-    from urllib.parse import urlparse
-    from neo4j import GraphDatabase
 
     account_id = require_env("DATABRICKS_ACCOUNT_ID", "Set DATABRICKS_ACCOUNT_ID in .env")
     ncc_id = require_env("NCC_ID", "Run 'create-ncc' first, or set NCC_ID in .env")
-    neo4j_uri = require_env("NEO4J_URI", "Set NEO4J_URI in .env")
-    neo4j_user = require_env("NEO4J_USERNAME", "Set NEO4J_USERNAME in .env")
-    neo4j_password = require_env("NEO4J_PASSWORD", "Set NEO4J_PASSWORD in .env")
     domain = require_env("NEO4J_DOMAIN", "Set NEO4J_DOMAIN in .env")
     profile = parse_profile_arg()
     token = get_databricks_token(profile)
 
-    hostname = urlparse(neo4j_uri).hostname
-    if not hostname:
-        print(f"  ERROR: Could not extract hostname from NEO4J_URI: {neo4j_uri}")
-        sys.exit(1)
-
     # Step 1: Fetch routing table from Aura BC
-    print(f"\nStep 1: Fetch routing table from {hostname}")
-    try:
-        driver = GraphDatabase.driver(
-            f"neo4j+s://{hostname}",
-            auth=(neo4j_user, neo4j_password),
-        )
-        driver.execute_query("RETURN 1 AS n")
-
-        all_hostnames = set()
-        pool = driver._pool
-        if hasattr(pool, "routing_tables"):
-            for db, table in pool.routing_tables.items():
-                for role in ("routers", "readers", "writers"):
-                    for addr in getattr(table, role, []):
-                        all_hostnames.add(addr[0])
-        driver.close()
-    except Exception as e:
-        print(f"  ERROR: Failed to fetch routing table: {e}")
-        sys.exit(1)
+    print("\nStep 1: Fetch routing table from Aura BC")
+    all_hostnames = fetch_routing_hostnames()
 
     if not all_hostnames:
-        print("  ERROR: No routing table hostnames found.")
+        print("  ERROR: Failed to fetch routing table. Check NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD in .env")
         sys.exit(1)
 
     # Build the full domain list: connection FQDN + routing members
@@ -1002,7 +1036,7 @@ Commands (Databricks NCC):
   attach-ncc         Attach NCC to a Databricks workspace
   setup-secrets      Store Neo4j credentials in Databricks secrets
   ncc-status         Show NCC, PE rule, and workspace status
-  update-pe-domains  Add routing table hostnames to PE rule (neo4j+s://)
+  update-pe-domains  Sync PE rule domains with current routing table
   detach-ncc         Detach and delete NCC from Databricks
 
 Databricks commands accept --profile <name> for CLI authentication.

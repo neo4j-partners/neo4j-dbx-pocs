@@ -2,6 +2,10 @@
 
 **Status: Validated** — Full end-to-end connectivity confirmed on 2026-03-20, including `neo4j+s://` with routing table discovery and client-side read/write splitting across cluster members. See [ARCHITECTURE.md](ARCHITECTURE.md) for the complete technical explanation.
 
+## Architecture Overview
+
+![Architecture Diagram](architecture.png)
+
 ## How It Works
 
 This architecture connects Databricks serverless compute to Neo4j Aura Business Critical over Azure Private Link using Application Gateway v2 as an L4 TCP proxy. It is fully managed: no VMs, no HAProxy, no NAT Gateway, no Load Balancer.
@@ -49,7 +53,7 @@ uv run python setup_azure.py phase2
 # 3. Check status
 uv run python setup_azure.py status
 
-# 4. Create Databricks NCC and private endpoint rule
+# 4. Create Databricks NCC and private endpoint rule (includes routing table domains)
 uv run python deploy.py create-ncc --profile <databricks-cli-profile>
 uv run python deploy.py create-pe-rule --profile <databricks-cli-profile>
 
@@ -78,7 +82,7 @@ The notebook runs three tests:
 
 1. **TCP connectivity** — verifies the Private Link path is open on port 7687
 2. **Neo4j driver (bolt+s://)** — connects with `bolt+s://`, authenticates, and runs a test query
-3. **Neo4j driver (neo4j+s://)** — connects with `neo4j+s://`, inspects the routing table, and validates read/write distribution across cluster members. Requires NCC PE rule updated with routing table hostnames (see `deploy.py update-pe-domains`)
+3. **Neo4j driver (neo4j+s://)** — connects with `neo4j+s://`, inspects the routing table, and validates read/write distribution across cluster members. Routing table domains are included automatically by `deploy.py create-pe-rule`
 
 ## Why Phased Deployment
 
@@ -121,7 +125,7 @@ Tests `neo4j+s://`, `bolt+s://`, and both schemes with Private Link keepalive se
 
 | Constraint | Detail |
 |------------|--------|
-| `neo4j+s://` requires NCC domain update | `neo4j+s://` triggers routing table discovery, returning cluster member hostnames that must be added to the NCC PE rule. Run `deploy.py update-pe-domains` to automate this. `bolt+s://` works without the domain update. |
+| `neo4j+s://` requires routing table domains | `neo4j+s://` triggers routing table discovery, returning cluster member hostnames that must be in the NCC PE rule. `create-pe-rule` includes them automatically. If hostnames drift, run `deploy.py update-pe-domains` to resync. |
 | Real Aura FQDN as NCC domain | Databricks uses the PE rule domain as the TLS SNI hostname. Aura BC rejects unrecognized SNI. The NCC PE rule domain must be the actual Aura FQDN (e.g. `f5919d06.databases.neo4j.io`). |
 | ~300s idle timeout | App Gateway Private Link has a ~5 minute idle timeout. Set `max_connection_lifetime` and `liveness_check_timeout` below 300 in the Neo4j driver. |
 | NCC region matches workspace | The NCC must be in the same region as the Databricks workspace. The App Gateway can be in the same or a different region. |
@@ -175,12 +179,12 @@ Key properties:
 | `status` | Show App Gateway health, backend status, Private Link connections |
 | `cleanup` | Delete the resource group and all resources |
 | `create-ncc` | Create a Databricks NCC |
-| `create-pe-rule` | Create private endpoint rule pointing to App Gateway |
+| `create-pe-rule` | Create PE rule with connection FQDN + routing table domains |
 | `approve` | Approve pending private endpoint connections |
 | `attach-ncc` | Attach NCC to a Databricks workspace |
 | `setup-secrets` | Store Neo4j credentials and domain in Databricks secrets |
 | `ncc-status` | Show NCC, PE rule state, and workspace attachment |
-| `update-pe-domains` | Add routing table member hostnames to PE rule (enables `neo4j+s://`) |
+| `update-pe-domains` | Sync PE rule domains with current routing table (maintenance) |
 | `detach-ncc` | Detach and delete NCC from Databricks |
 
 ### Other scripts
