@@ -1,0 +1,584 @@
+Mar 20, 2026
+Review DBX to Neo4j BC networking - Staples - Transcript
+00:00:00
+
+Sam Longley: Yeah, we're supposed to have 50 here as well. Pretty exciting. That means I need to get out for a nice walk with my little doggy. Uh it's a little little black Havanese like 14 pound. Um yeah, it's a it's a lap it's a lap dog. Um I think let's see. It's co dog. I'm trying to think if she's turning four or five. Um,
+Guhan Sivaji: Oh
+Sam Longley: yeah.
+Guhan Sivaji: go.
+Sam Longley: Yeah. Yep. She happened to like she's not always in my office, but she just she's here today.
+Guhan Sivaji: Oh,
+Sam Longley: Molly,
+Guhan Sivaji: it looks like one of those smart breeds, right?
+Sam Longley: not a smart breed.
+Guhan Sivaji: Not a smart.
+Sam Longley: Molly, you're a genius. When there's food involved, she's a genius.
+Guhan Sivaji: Okay.
+Sam Longley: Um, but yeah, other than that, not so much. But she's very good. Like she um I've trained her so that I can take her on a walk and as long as there's not a lot of distraction and stuff like she'll walk next to me without a leash.
+
+
+00:01:09
+
+Sam Longley: Um she used to be good at like coming and healing and all that, but she's really fallen off that wagon,
+Guhan Sivaji: Uh my sisters have dogs uh but they are kind of jealous.
+Sam Longley: but
+Guhan Sivaji: For example, if my elder sister uh you know goes to my younger sister's house and if she pets a dog and comes back, she knows that my sister was exposed to another dog scent and so she gets
+Sam Longley: She can smell it.
+Guhan Sivaji: Yeah.
+Sam Longley: Yeah.
+Guhan Sivaji: she gets
+Sam Longley: Yep.
+Guhan Sivaji: aggressive
+Sam Longley: They smell it and they get all jealous and stuff like that. Yep. Totally. I'm hoping the other guys are gonna join
+Guhan Sivaji: in I interviewed him.
+Sam Longley: us.
+Guhan Sivaji: I, you know, I worked with him for a couple of weeks before I uh left that
+Sam Longley: Yep.
+Guhan Sivaji: org.
+Sam Longley: Before you came to join the dark side over here.
+Guhan Sivaji: I used to be a sales engineer for eight years at Inform America.
+Sam Longley: Yeah,
+Guhan Sivaji: So,
+
+
+00:02:05
+
+Sam Longley: I remember. Yeah.
+Guhan Sivaji: nothing new here.
+Sam Longley: Yeah.
+Guhan Sivaji: So, but uh Sam uh while I have you here uh before Ryan joins
+Sam Longley: Yeah.
+Guhan Sivaji: um uh this will be my first P. So all these months I've been working with uh Bob on multiple existing engagements.
+Sam Longley: Mhm.
+Guhan Sivaji: Hey Ryan.
+Ryan Knight: Hey, Guhan. I haven't seen for a while.
+Guhan Sivaji: Yes.
+Sam Longley: Right.
+Ryan Knight: Have you?
+Guhan Sivaji: You did you just wake woke up or you see your hair sticking
+Ryan Knight: Oh,
+Guhan Sivaji: up.
+Ryan Knight: sorry. Yeah. No,
+Guhan Sivaji: That's all
+Ryan Knight: it's morning.
+Guhan Sivaji: right.
+Ryan Knight: I shouldn't when I when I when I program it, I just shouldn't pull my hair.
+Guhan Sivaji: So Ryan,
+Sam Longley: Huh?
+Guhan Sivaji: which time zone are you in Ryan?
+Ryan Knight: I'm I'm mounting.
+Guhan Sivaji: Oh, still in uh um Salt Lake.
+Ryan Knight: Yeah, we didn't move.
+Guhan Sivaji: Oh my god, that's awesome. Right.
+Ryan Knight: Yeah. Yeah.
+Guhan Sivaji: So that's good.
+
+
+00:02:52
+
+Ryan Knight: Super happy about that. There. I'll fix my hair.
+Guhan Sivaji: Yeah,
+Ryan Knight: Sorry about that.
+Guhan Sivaji: that's all right.
+Ryan Knight: Yeah.
+Guhan Sivaji: So um I was sorry.
+Ryan Knight: Have you been How have you
+Guhan Sivaji: So I've been so good so far.
+Ryan Knight: been?
+Guhan Sivaji: It's been three four months now. And uh in fact, I registered for your your Microsoft uh New York City event and then I got an email saying that was cancelled.
+Ryan Knight: Yeah.
+Guhan Sivaji: I was Yeah.
+Ryan Knight: It would been good to see you.
+Guhan Sivaji: Yeah. So, um anything uh new? You you guys are hiring a new uh director, right? To replace
+Ryan Knight: Yes.
+Guhan Sivaji: Sunny.
+Ryan Knight: Yep. We're hiring someone to match the AWS account. So, yeah.
+Guhan Sivaji: Uh is he already on board or still?
+Ryan Knight: Yeah. We're still going through the interview process. Still trying to find the right person.
+Guhan Sivaji: Nice.
+Ryan Knight: So,
+Guhan Sivaji: Awesome. Okay, so yeah, let's get started.
+
+
+00:03:41
+
+Guhan Sivaji: I think uh we have 25 minutes. I have a hard stop at the top of the hour um with a customer call. So let's get started as uh it's
+Sam Longley: Yep. Actually, let me Can I record? I turned on the Is it recording?
+Guhan Sivaji: already Yeah, I think uh yeah
+Sam Longley: I turned on notes, but it's being transcribed. Where's the recording part?
+Guhan Sivaji: all
+Sam Longley: Um, manage the recording. Start recording. All right. start. Sorry, I'm recording. It's official. This is pro I guess recording just in case Dave Rosen Bloom. So, as you know, like I'm not a networking expert. So, that's why um you know, between Ryan and Guan and then David, I'm kind of uh relying on you folks.
+Guhan Sivaji: Okay, I'm opening the G that Ryan
+Ryan Knight: Yeah, I mean,
+Guhan Sivaji: sent.
+Ryan Knight: Guhan, I can walk you through the where we're at and what's going on. Uh,
+Guhan Sivaji: Okay.
+Ryan Knight: so the challenge is is data brick serverless because it's serverless, right?
+
+
+00:04:45
+
+Ryan Knight: It spins the compute up and down. Um, and when it spins that compute up and down, you're not you don't have like a guaranteed IP address. So there's not I can't. So what they want to do is they want to deploy Aura business critical with IP whitelisting. The problem is is that with orura IP whitelisting I mean even if I have like a cedar range I don't have like a fixed IP that I can pin to dbick serverless. Hold on one second. Right. So the challenge becomes is how can you get a fixed IP address to pin to the the the Aura business critical whitelisting functionality. Um the the perfect solution is uh VDC because of VDC I can it
+Sam Longley: Yeah,
+Ryan Knight: has a private link with a fixed IP address but they don't want or VDC they want to make life painful as possible. So they want to do this or business critical with whitelisting. So to get a private link with aura business critical there is there's a couple of workarounds and I honestly I don't like any of them.
+
+
+00:06:00
+
+Ryan Knight: They're all ugly. I'll just say up front. So the the so I mean really there's three options. Um, two of the options require us to basically set up Azure infrastructure. That's a very hack to kind of force a privately kind of setup to or a business critical to force kind of an IP
+Guhan Sivaji: Okay,
+Ryan Knight: whitelisting.
+Guhan Sivaji: sorry. Let me step back. So you're saying the serverless doesn't give a same IP or same name which is known thing but are we trying to overcome that or uh uh I
+Ryan Knight: Yeah.
+Guhan Sivaji: still
+Ryan Knight: So there
+Sam Longley: the fact that the fact that those IP addresses are never fixed,
+Ryan Knight: this
+Guhan Sivaji: yeah
+Sam Longley: like how do you whitelist like this infinite? I mean, it's not infinite. They started by saying, well, we think we'll we think if you had a hundred IP addresses you could whitelist, that would be enough for now. But they immediately were like, well, but we know we're going to grow past that.
+
+
+00:07:03
+
+Guhan Sivaji: Yeah.
+Sam Longley: So,
+Guhan Sivaji: So,
+Ryan Knight: Left my keys
+Guhan Sivaji: and then why do why are we talking about the VDC now to is it to overcome that
+Ryan Knight: under
+Guhan Sivaji: or
+Sam Longley: So VDC would give them the private link and private link would let's see I'm not I mean I guess
+Ryan Knight: private link works. They don't want to pay for VDC.
+Sam Longley: there's a private link solution. Um private linkup um
+Ryan Knight: Yeah. So I set up so I set up a solution. I mean I don't have access to VDC but I have solution I have access to uh enterprise edition which is so I can simulate basically almost doing something exactly this same as or VDC with enterprise edition and I can set up a private link to enterprise edition which solves everything but what they're saying is they don't want to pay for
+Sam Longley: Yeah,
+Ryan Knight: VDC
+Guhan Sivaji: But they're okay with the private link, right? So private link business
+Ryan Knight: All
+Sam Longley: they I think they would love private link.
+
+
+00:08:03
+
+Guhan Sivaji: critical.
+Ryan Knight: right.
+Sam Longley: I think if we if we said private link is now available for BC, I think they would be like great, right,
+Guhan Sivaji: I
+Sam Longley: Ryan?
+Ryan Knight: Yeah.
+Sam Longley: I haven't heard anything against
+Ryan Knight: Yeah. No, they they want they Oh,
+Guhan Sivaji: mean
+Sam Longley: Yeah.
+Ryan Knight: if we could give a private link with BC, they'd be like, great, do it. But they private link is not available with BC because BC is
+Guhan Sivaji: yeah but
+Ryan Knight: deployed in a different manner that you can't do a direct private link to business critical.
+Guhan Sivaji: okay so can we do a outside private link to but somehow we have to It has to be restricted to that VPC,
+Ryan Knight: Yeah, that's what Yeah, that's what all this does.
+Sam Longley: So yeah,
+Guhan Sivaji: right?
+Sam Longley: I actually have I have a I don't Oh, you have two charts. You have your two approaches listed here. Um
+Ryan Knight: Yeah. So I can walk through all
+Sam Longley: Yeah.
+
+
+00:08:58
+
+Guhan Sivaji: Yeah, please. Yeah. So,
+Ryan Knight: this.
+Guhan Sivaji: uh but still uh let me uh address the or understand the first uh issue.
+Sam Longley: And
+Guhan Sivaji: So yes, we cannot whitelist uh the serverless uh datab bricks endpoint and so we are going to we are thinking about having a private link. So where will the uh the connectivity setup?
+Ryan Knight: where where would the connectivity setup
+Guhan Sivaji: Yeah,
+Ryan Knight: be?
+Guhan Sivaji: between data bricks and uh the neo 4j
+Ryan Knight: And so we would so you would deploy your own like infrastructure in Azure to to handle
+Guhan Sivaji: because
+Ryan Knight: that.
+Guhan Sivaji: Okay.
+Ryan Knight: So you're basically kind of you're basically setting up some kind of like a load balancer app gateway scenarios to try to basically force a private link to Ora BC. So you're basically kind of setting up a whole bunch of custom infrastructure to simulate private
+Guhan Sivaji: Okay,
+Ryan Knight: link.
+Guhan Sivaji: but having this private link will um kind of handle this situation where we don't get the same host name and same IP number from the datab
+
+
+00:10:03
+
+Sam Longley: Is
+Ryan Knight: Well,
+Guhan Sivaji: bricks.
+Ryan Knight: so how it work is so if I go to let's see counts.
+Sam Longley: that because there's this is it the NCC thing that handles that on the Azure and data brick
+Ryan Knight: Yeah. So I can show you.
+Sam Longley: side?
+Guhan Sivaji: Okay. Okay. So now you logged into data
+Ryan Knight: So in data bricks so so in datab bricks the data bricks is organized
+Guhan Sivaji: bricks.
+Ryan Knight: as like accounts this account manages all of neo forj workspaces so this is like a highle like account management and then underneath your accounts you have workspaces so in your account management I can go
+Guhan Sivaji: Right.
+Ryan Knight: under security and I can set up um they're called network connectivity configurations.
+Guhan Sivaji: Ah, this makes sense now. Okay. And you select the region. Got it. Okay.
+Ryan Knight: Yeah.
+Guhan Sivaji: So,
+Ryan Knight: And so so I set up a uh I basically because
+Guhan Sivaji: that's
+Ryan Knight: we can't get the fixed IPs from serverless, I can have serverless always route through my network connectivity
+
+
+00:11:17
+
+Guhan Sivaji: got this clears the things.
+Ryan Knight: configuration.
+Guhan Sivaji: Okay.
+Ryan Knight: Yeah.
+Guhan Sivaji: Uh-huh.
+Ryan Knight: Yeah. So, so basically what you do is you set up, sorry, it's complicated. I know I have a hard time explaining it all. You set up Azure private link infrastructure. So, you set up a whole like uh so like I have like a whole like infrastructure deployment on the Azure side. I set up all the the Azure infrastructure to create a I I essentially have a a load balancer with a reverse proxy that reverse proxies into the Arab BC. And so that that whole reverse proxy setup, I can whitelist the reverse proxy into the Ora business critical and then and then create a private
+Guhan Sivaji: Yep.
+Ryan Knight: link off of that. And then I go into data bricks and I use that to configure my my
+Guhan Sivaji: Got it.
+Ryan Knight: Yeah.
+Guhan Sivaji: Yeah, I saw that HA proxies. In fact, I was presenting the same HA proxy to our team to the sales engineering team this this morning.
+
+
+00:12:20
+
+Guhan Sivaji: So, yeah. And so, so this is now um so you said you have multiple approaches, right? So,
+Ryan Knight: Yeah.
+Guhan Sivaji: so the next is application gateway
+Ryan Knight: Yeah. Yeah. So I can walk through. So uh no right wrong screen. Yeah. So there's two approaches. One is a load balancer but the load balancer has to um so so I can't do a load balancer directly into or BC. So I have to do an or a load balancer. Yeah the HA proxy VM is necessary because an internal load balancer can only route to private IPs in its own VNET and ORBC lives outside the Azure network. So you have to do a local proxy that the low bouncer could target.
+Guhan Sivaji: Yeah. So, uh yeah, this HA proxy, right, Ryan? So, this is uh you know,
+Sam Longley: Actually,
+Ryan Knight: Yeah.
+Guhan Sivaji: compared to the reverse proxy, the engineext one, this is what kind of a more widely accepted based on my research and based on the customers I talked to.
+
+
+00:13:25
+
+Ryan Knight: Yeah.
+Guhan Sivaji: Uh I also met the HA proxy people. So this is more of a widely accepted secure stable.
+Ryan Knight: Yeah.
+Guhan Sivaji: So but uh so you you said you don't like this approach and you're thinking about
+Ryan Knight: Well,
+Sam Longley: before before you answer that,
+Ryan Knight: so so
+Sam Longley: can I ask real quick, Ryan,
+Guhan Sivaji: other
+Sam Longley: these two approaches is so you just fixed one.
+Ryan Knight: yeah.
+Sam Longley: You sent us an email at 2 am the other night.
+Ryan Knight: Yeah. I
+Sam Longley: The one and that was this is is that two is that approach number one? Okay.
+Ryan Knight: Yes,
+Sam Longley: I just want to part of my challenge is we're talking to Ryan. We're talking to Data Bricks. We're talking to Staples.
+Ryan Knight: I understand.
+Sam Longley: We're talking to David. And everyone has like option one, option two, option three, but no one has actually I mean Ryan, you've put it in writing here, but when we get into a verbal conversation, they start saying approach this, approach that, and I don't know which one we're actually talking about.
+
+
+00:14:25
+
+Sam Longley: So cool.
+Ryan Knight: That's fine.
+Sam Longley: Thanks for specifying
+Ryan Knight: Yeah. So, so these are workarounds. So the other alternative to all of this is datab bricks has a preview feature. See where is it? Wait outbound IP blah blah blah blah blah. Um if your workspace is enabled for serverless compute firewall, you receive a URL that points to a JSON file containing the outbound IP addresses. You can use this information to allow or deny traffic from Azure data brick services. So this is this is the entirety of the documentation on it. I have pinged Gardick's team like 10 times trying to get access to this feature. If I understand this, what this would do is we could get a JSON file with this like the IP ranges for data
+Guhan Sivaji: Oh,
+Ryan Knight: bricks. We can then use the Aura BC API to to basically automatically update our white list address based on that JSON file and keep the ORBC white list in sync with the JSON
+Guhan Sivaji: Yeah.
+
+
+00:15:36
+
+Ryan Knight: file.
+Guhan Sivaji: So you see the pre uh private preview.
+Ryan Knight: Yeah.
+Guhan Sivaji: So you know when you go go to the you is it enabled in our data bricks? Can you go to your data bricks? Sometimes it's not.
+Ryan Knight: No, it's
+Guhan Sivaji: Oh, it's still not. Okay. So,
+Ryan Knight: not.
+Guhan Sivaji: I tried to get it enabled and I when I was when I had my account, so I couldn't get it and then I gave up. So,
+Ryan Knight: Yeah. And I pinged we have the uh the the partner manager and we have like a technical account
+Guhan Sivaji: um
+Ryan Knight: partner manager and I ping like 10 people from data bricks trying to get access to this and I
+Guhan Sivaji: Joe Marini is right.
+Ryan Knight: haven't.
+Guhan Sivaji: Is it is it still Oh,
+Ryan Knight: Joe left.
+Guhan Sivaji: he left.
+Ryan Knight: Yeah, it's now I'll teal or something like that.
+Guhan Sivaji: Okay. All right. So Ryan, so let's see um what else you know says what else we can work on.
+
+
+00:16:20
+
+Ryan Knight: So,
+Guhan Sivaji: So the HA proxy right so that can be a solution but you know sometimes there are two issues right one is the SSL um SSL handshake from uh if you're you know setting up your SSL then we need to make sure that SSL handshake happens at the haroxy level so that the overall SSL and your SSL um you know are okay with each other and the second thing is sometimes HA proxy you know it has to run on a VM right sometimes we will think about Um the uh
+Ryan Knight: Yeah. Yeah. That's that this whole setup does that.
+Guhan Sivaji: think okay
+Ryan Knight: So this So I have it working. So I have that solution
+Sam Longley: Sorry, can I pause? Gohan,
+Ryan Knight: working.
+Guhan Sivaji: but the other no SSL R resolved it
+Sam Longley: you're saying two issues. SSL is one issue. Yeah. Yeah. No, but okay.
+Guhan Sivaji: so the other other one sometimes if it's in a
+Sam Longley: But was the other one the
+
+
+00:17:15
+
+Guhan Sivaji: production R they may think that oh HA is one u easily uh
+Ryan Knight: I'm
+Guhan Sivaji: breakable thing in the middle of uh this infrastructure Yeah,
+Ryan Knight: just
+Sam Longley: So making it a high availability like Yeah.
+Guhan Sivaji: even though HA stands for high availability, we is people get worried about availability of this HA server. So if possible, they can scale up to have another instance of HA server and do a load balancing and things like that can be done. I'm just sharing
+Ryan Knight: No. Yeah. Yeah.
+Guhan Sivaji: some
+Ryan Knight: I agree. No, you're we're on the same page. People get Yeah. So the the I would say the primary problem with all of this Guhon is
+Guhan Sivaji: awesome
+Sam Longley: Okay.
+Ryan Knight: um all of these require using bolt instead of the standard Neo forj because Neo forj right has a a routing table
+Guhan Sivaji: Oh yeah. Yeah. So Ryan,
+Sam Longley: Actually,
+Guhan Sivaji: I can easily quickly tell you.
+Ryan Knight: discovery.
+Guhan Sivaji: Yes, I had this issue but I was able to resolve it.
+
+
+00:18:08
+
+Guhan Sivaji: But now I can show you a live demo. I just did it. So it can actually use Neo4j plus.
+Ryan Knight: Okay.
+Guhan Sivaji: Yes.
+Ryan Knight: How do you resolve that then?
+Guhan Sivaji: Uh okay. I can share my
+Sam Longley: actually,
+Guhan Sivaji: HA.
+Sam Longley: let's I mean, Ryan Guhan, what you did was awesome, but you're just gonna Is it the exact thing that you were talking about this morning, which was the uh haroxy? You're able to set that up,
+Guhan Sivaji: Yeah,
+Sam Longley: right?
+Guhan Sivaji: but we didn't go into this detail of bold plus. Yes, I know.
+Sam Longley: Okay.
+Guhan Sivaji: Uh, initially I got this issue.
+Sam Longley: Yeah.
+Guhan Sivaji: Let me quickly share and then I will uh share I set it in
+Ryan Knight: So, where did you set up your hunt?
+Guhan Sivaji: AWS but um so you see my screen right? So now HA so no not HA proxy browser dot.
+Sam Longley: Yeah.
+Ryan Knight: Yeah.
+Guhan Sivaji: So yes this one is actually going into a HA proxy.
+
+
+00:18:57
+
+Guhan Sivaji: Okay. So here is my terminal. So oh right there. So I have uh the full chain uh end to end
+Ryan Knight: Mhm.
+Guhan Sivaji: encryption and uh it's the same certificate that I have it in the ha proxy as well as the
+Ryan Knight: All
+Guhan Sivaji: neoforj. So uh you see this one I'm I'm actually using neoforj uh I can select both board or neoforj. So I'm let me select this one. So then this is the same uh URL for both uh you know so now I can
+Ryan Knight: right.
+Guhan Sivaji: login and then if you see this one yes it is 4G plus so with that let me share my Neo4j no so I mean haroxy config else yeah okay So oh sorry wrong instance. So this one okay so this is the one we just went right browser dot dot. So they both are going to the same server. So this one I built it for a different use case.
+Ryan Knight: Huh?
+Guhan Sivaji: Ryan the you the requirement is to have one IP and one port.
+
+
+00:20:12
+
+Guhan Sivaji: That's why in the DN DNS settings these both these two domains go to the same IP address which is actually same u this this server.
+Ryan Knight: Okay.
+Guhan Sivaji: So um yeah I have those certificates in the slasherts. It's a full chain that's why you see the full uh chain like this. Yeah. Uh and then uh
+Ryan Knight: Yeah.
+Guhan Sivaji: yeah I have the roundroin going to all the three servers but you can have just one.
+Ryan Knight: Okay.
+Guhan Sivaji: And yeah if you want I can send this file to you.
+Ryan Knight: Yeah. Yeah.
+Sam Longley: Let's see. So, what is that that that um so Ryan,
+Ryan Knight: So you do the Oh
+Sam Longley: did you think you were thinking previously you could only use bolt on this option one,
+Ryan Knight: god.
+Sam Longley: but now now Guhan is showing us we can in fact use the plus
+Guhan Sivaji: Yeah. No.
+Sam Longley: S.
+Guhan Sivaji: Bolt plus S versus Neo 4J plus because the routing will happen.
+Sam Longley: That's that's what I meant.
+
+
+00:21:12
+
+Guhan Sivaji: Yeah.
+Sam Longley: That's what I meant.
+Guhan Sivaji: Yeah.
+Sam Longley: We can use either Bolt or near forj, right? Plus S.
+Guhan Sivaji: Yeah.
+Sam Longley: Yeah.
+Ryan Knight: So with this you can basically set up the routing table in that conf in the HA proxy and so that allows you to use the Neo forj protocol routing table essentially because you're basically putting the routing table in the HA proxy. Is that what you're
+Guhan Sivaji: Yeah,
+Ryan Knight: saying?
+Guhan Sivaji: I I but I'm not 100% sure this is the reason why it started working because but uh initially I faced that issue and uh I played with the certificates and it started working.
+Ryan Knight: All
+Guhan Sivaji: So I think this restriction is ba basically uh previously I was able to use bold plus s
+Ryan Knight: right.
+Guhan Sivaji: and then you know if I use this one right it actually worked exactly what what I expected first it'll go to the east next time I log in and log out it'll go to the central and then login and log out it'll go to the west so it was exactly following the round dropping but now uh you know uh it actually goes to the uh bolt plus sorry instead of bolt plus it goes to neo4j plus yes so here if I do show servers it shows everything.
+
+
+00:22:17
+
+Guhan Sivaji: So um also which I don't know which one is the is the leader. So but I can tell you I can tell you
+Ryan Knight: or interesting. Oh, that's really interesting. I didn't know you could do it that way.
+Guhan Sivaji: that
+Ryan Knight: So that so then we should be a that would eliminate the the Neo forj the the bolt limitation and then you can use neo forj and you can get the full like routing table
+Guhan Sivaji: yeah exactly.
+Ryan Knight: functionality oh that's really cool can you share that file with
+Guhan Sivaji: Yeah, this one works. So Yeah,
+Ryan Knight: me so I can
+Guhan Sivaji: I will I have a call right away in seven minutes. I will share after that or you know if you want to quickly take a screenshot
+Ryan Knight: yeah oh yeah yeah just do that
+Guhan Sivaji: um because this from copying from
+Ryan Knight: here I can just take a screen chat
+Guhan Sivaji: here needs uh cipher no cyp and all those things.
+Ryan Knight: I'll just take a screenshot.
+Guhan Sivaji: Oh nice.
+
+
+00:23:13
+
+Ryan Knight: Yeah,
+Guhan Sivaji: Okay.
+Ryan Knight: because I can I can just give uh AI the the screenshot and say reverse engineer this.
+Guhan Sivaji: So Ryan, I need to so I can be honest,
+Sam Longley: Amen.
+Guhan Sivaji: right? So when I interviewed you, you said you use uh an uh cloud.
+Ryan Knight: Oh,
+Guhan Sivaji: So I immediately thought, okay, you you are the best person.
+Ryan Knight: yeah.
+Guhan Sivaji: So uh so do you use the cloud uh yeah cloud
+Ryan Knight: Quad code. Yeah.
+Guhan Sivaji: code?
+Ryan Knight: Yes,
+Guhan Sivaji: Uh I tried that and our is it your personal account or you use Neo
+Ryan Knight: I do. It's my personal account because I can't get it approved.
+Guhan Sivaji: forj?
+Ryan Knight: Well, I haven't even tried, but everyone says it's really hard to get approved. So,
+Guhan Sivaji: Yeah I I tried and I still have the basic one. I installed the cloud sorry cloud code and still not able to because this one I have to keep on copy pasting the code and troubleshooting but uh yeah so you you how
+
+
+00:24:02
+
+Sam Longley: The secret, the secret is when you request it,
+Guhan Sivaji: much
+Sam Longley: you tell them you got to do customer demos. Um, so build in the story about like customerf facing, customer demos, blah blah blah.
+Guhan Sivaji: so you can you get approved oh my I
+Sam Longley: I've gotten a Yeah, a bunch of folks on David's team have been approved.
+Guhan Sivaji: didn't know that I will definitely pursue In fact,
+Sam Longley: Yeah.
+Guhan Sivaji: I probably create requested and it got rejected. Okay.
+Sam Longley: Yeah.
+Guhan Sivaji: So, I will try that
+Sam Longley: Um,
+Ryan Knight: No,
+Sam Longley: should we go through the rest of your thing,
+Guhan Sivaji: one.
+Ryan Knight: I
+Sam Longley: Ryan, if we could? Like, is there more is there more to show or not really?
+Ryan Knight: Yeah.
+Sam Longley: like
+Ryan Knight: Well, so I mean if we do app gateway here,
+Sam Longley: Um,
+Ryan Knight: I can share my screen again. Yeah. So, so good. I use cloud code on my personal account because it's it makes a world of difference.
+
+
+00:24:43
+
+Guhan Sivaji: Okay.
+Ryan Knight: Like it's so powerful.
+Sam Longley: Nothing.
+Ryan Knight: I do everything with cloud code.
+Guhan Sivaji: Yep.
+Ryan Knight: Um, what do you use then? Go on.
+Guhan Sivaji: I use uh Gemini Pro. Yeah,
+Ryan Knight: Yeah.
+Guhan Sivaji: it's not easy. I have five minutes, right? Just so you
+Ryan Knight: Yeah. Yeah.
+Guhan Sivaji: know.
+Ryan Knight: The other approach is uh app gateway which
+Guhan Sivaji: Okay.
+Ryan Knight: the advantage of app gateway is that you don't have to do a har reverse proxy.
+Guhan Sivaji: Yeah, I think in AWS I didn't try in Azure there is a challenge uh oh that is that is not applicable here because for me when I thought about using the app gateway Ryan the you know we cannot use one uh one IP address and we cannot do the SNI only HA proxy can do that that's why I have to
+Ryan Knight: Right.
+Guhan Sivaji: stick with HA proxy so so this one yeah this
+Ryan Knight: Yeah. The the Yeah, there's an advantage to using a proxy because then you can preserve the SNI.
+
+
+00:25:40
+
+Guhan Sivaji: one yeah but this one
+Ryan Knight: Yeah.
+Guhan Sivaji: is also another option to use application gateway and in fact another approach what I did in Azure Ryan I used two uh two load balancers one for 7687 and one for HTTPS uh but they both will at the end it will
+Ryan Knight: Oh.
+Guhan Sivaji: expose 443 so
+Ryan Knight: Oh,
+Sam Longley: Um,
+Ryan Knight: that's smart. That's a good idea.
+Guhan Sivaji: Yeah.
+Ryan Knight: I could try that as well. Yeah. I mean, my I was just kind of prototyping out like a lot of the different options and then weighing the pros and cons and then Yeah. then we can kind of decide which one to use and recommend. So,
+Guhan Sivaji: I am going to try this aura uh on a private VPN. Yes. Yes
+Sam Longley: I was just going to say so, so we Ryan,
+Guhan Sivaji: sir.
+Sam Longley: so the is the number two here. Is that the app? That's yeah, that's the app gateway that loses or or there's the SNI risk.
+
+
+00:26:37
+
+Sam Longley: So at the end of the day in my mind like I don't know that we should even mention I feel like the two that I want to
+Ryan Knight: Yes.
+Sam Longley: bring to staples are your option number one load balancer haroxy and number two is VDC private link like that's
+Guhan Sivaji: I can tell you uh first starting from I mean from uh the customer's shoes I can tell as
+Sam Longley: is
+Guhan Sivaji: soon as you they hear proxy or ha proxy or reverse proxy they hate it they they think it's a even though it is pro one it is widely accepted they still think oh no I'm not we are not comfortable with third party software if something that is available in Azure yes right so yeah I would say from customer point point of view they would allow the application gateway um also they don't have the restriction of using only 443 right so then they can actually use the application gateway or multiple load balancers g you know approach
+Sam Longley: So they have done.
+Guhan Sivaji: so
+Sam Longley: Okay. So does that mean the SNI?
+
+
+00:27:37
+
+Sam Longley: Let me ask first with app gateway can we still use neo forj pluss protocol
+Guhan Sivaji: Yeah,
+Sam Longley: or no I in somehow in my
+Guhan Sivaji: that should definitely be okay. That should not
+Sam Longley: notes I I don't know if claude told me the wrong thing or someone else told
+Ryan Knight: No,
+Sam Longley: me
+Ryan Knight: I I can't I haven't been able to get the Neo Forj protocol to work with App Gateway because it has the routing table. So after it establishes the initial connection, it then tries to right because what happens is with the NEOJ protocol, I have a routing table and so it'll try to pick a route that's not part of the original like app gateway private link route and so it could route to a different connection than it's the app gateway route because right because your Neo Forj has three separate entries and when you go try to go through the app gateway it might try a different entry.
+Guhan Sivaji: Hey guys.
+Sam Longley: Um,
+Ryan Knight: So that's why you have to go to so if you do bolt it basically forces it over a single IP address which
+
+
+00:28:43
+
+Sam Longley: I mean, so, um, in short,
+Ryan Knight: so
+Sam Longley: Guhan, what you said, I mean, they they've been leaning heavily on this app gateway side, right, Ryan? They they keep saying like,
+Ryan Knight: yeah they have it to worked.
+Sam Longley: "We want to do appate."
+Ryan Knight: They have it working. They have app gateway with bolt working.
+Sam Longley: Yeah.
+Ryan Knight: But I think app gate with but when you go over bolt you lose all of the like the connection load balancing the routing tables like all like a lot of functionality but it
+Sam Longley: And and sorry the quick Guan,
+Ryan Knight: works.
+Sam Longley: were you saying you think we can get Neo Forj Plus S working on App Gateway?
+Guhan Sivaji: Uh I haven't tried I cannot say it with a lot of confirmation but Ryan if Ryan says it cannot be done then it may be true right sorry uh I with HA proxy yes I definitely say because I literally showed it to you
+Sam Longley: Right.
+Guhan Sivaji: guys but uh app gateway I never tried
+Sam Longley: Yeah.
+Ryan Knight: Huh?
+Sam Longley: Um, okay. So, gotcha. Um, how big is this SNI risk thing? Do we need to like be really belabor that point or we just basically I'm trying to figure out if I if if we show them I guess we can still talk about the app gateway as an option. That's where I'm trying not to. Yeah,
+Guhan Sivaji: So Sam real quick before I this so I'll tell you if they don't bring up this 443 port
+Sam Longley: you gota
+Guhan Sivaji: issue or to have just one single IP then we don't really worry need to worry about the SNI at all. We can definitely forget about the HA proxy and still use this HA sorry we can use the application gateway.
+Sam Longley: Yeah. Yeah. Yeah. Um Yeah. Yeah. Thanks.
+
+
+Transcription ended after 00:30:47
+
+This editable transcript was computer generated and might contain errors. People can also change the text after it was created.

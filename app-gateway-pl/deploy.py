@@ -575,10 +575,13 @@ def cmd_setup_secrets():
         print("ERROR: NEO4J_PASSWORD not set in .env")
         sys.exit(1)
 
+    neo4j_domain = require_env("NEO4J_DOMAIN", "Must be the real Aura FQDN (e.g. a5e20181.databases.neo4j.io). Set NEO4J_DOMAIN in .env")
+
     scope_name = "neo4j-appgw-poc"
 
     print(f"\n  Profile:    {profile or 'DEFAULT'}")
     print(f"  Scope:      {scope_name}")
+    print(f"  Domain:     {neo4j_domain}")
 
     print(f"\n  Creating secret scope: {scope_name}")
     result = subprocess.run(
@@ -604,6 +607,17 @@ def cmd_setup_secrets():
         sys.exit(1)
     print("    Stored.")
 
+    print(f"  Storing secret: domain")
+    result = subprocess.run(
+        [*dbx_prefix, "secrets", "put-secret", scope_name, "domain",
+         "--string-value", neo4j_domain],
+        capture_output=True, text=True, check=False,
+    )
+    if result.returncode != 0:
+        print(f"    ERROR: {result.stderr.strip()}")
+        sys.exit(1)
+    print("    Stored.")
+
     print()
     print("=" * 60)
     print("DONE")
@@ -613,6 +627,7 @@ def cmd_setup_secrets():
     print()
     print("Use in Databricks notebooks:")
     print(f'  password = dbutils.secrets.get("{scope_name}", "password")')
+    print(f'  domain   = dbutils.secrets.get("{scope_name}", "domain")')
 
 
 def cmd_ncc_status():

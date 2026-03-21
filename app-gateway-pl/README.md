@@ -1,4 +1,6 @@
-# Application Gateway POC — Databricks Serverless to Neo4j Aura BC
+# Application Gateway — Databricks Serverless to Neo4j Aura BC
+
+**Status: Working** — Validated end-to-end on 2026-03-20. Databricks serverless compute connects to Neo4j Aura Business Critical over Azure Private Link via Application Gateway v2 L4 TCP proxy. See [PHASED_DEPLOY_EXPERIMENT.md](PHASED_DEPLOY_EXPERIMENT.md) for the full experiment log.
 
 Private connectivity from Databricks serverless compute to Neo4j Aura Business Critical using Azure Application Gateway v2 as an L4 TCP proxy with Private Link. No VMs, no HAProxy, no NAT Gateway, no Load Balancer. The gateway handles TCP passthrough on port 7687, preserving TLS SNI end-to-end, while Private Link accepts Databricks NCC private endpoints.
 
@@ -47,22 +49,22 @@ uv run python deploy.py attach-ncc --profile <databricks-cli-profile>
 # 7. Check NCC status (PE rule should be ESTABLISHED)
 uv run python deploy.py ncc-status --profile <databricks-cli-profile>
 
-# 8. Store Neo4j credentials in Databricks secrets
+# 8. Store Neo4j credentials and domain in Databricks secrets
 uv run python deploy.py setup-secrets --profile <databricks-cli-profile>
 
 # 9. Test from a Databricks serverless notebook
-#    Import appgw_private_link_test.ipynb into your workspace,
-#    update NEO4J_DOMAIN in the config cell, and run on serverless compute.
+#    Import appgw_private_link_test.ipynb into your workspace
+#    and run on serverless compute. Domain and password are read from secrets.
 ```
 
 ## Test from Databricks
 
-After attaching the NCC and storing secrets, import `appgw_private_link_test.ipynb` into your Databricks workspace and run it on serverless compute. The notebook runs two tests:
+After attaching the NCC and storing secrets, import `appgw_private_link_test.ipynb` into your Databricks workspace and run it on serverless compute. The notebook reads both the Neo4j domain and password from the `neo4j-appgw-poc` secret scope (populated by `deploy.py setup-secrets`). No manual edits needed.
+
+The notebook runs two tests:
 
 1. **TCP connectivity** — verifies the Private Link path is open on port 7687
 2. **Neo4j driver** — connects with `bolt+s://`, authenticates, and runs a test query
-
-Before running, update `NEO4J_DOMAIN` in the config cell to your real Aura FQDN (e.g. `xxxxxxxx.databases.neo4j.io`). The notebook reads the password from the `neo4j-appgw-poc` secret scope.
 
 Expected results:
 ```
@@ -88,7 +90,7 @@ The workaround: deploy in two phases.
 1. **Phase 1** deploys a pure L7 gateway (HTTP listener on port 80, no L4 properties). Private Link validation passes. A Private Endpoint is created and approved.
 2. **Phase 2** updates the same gateway to add L4 TCP listeners on port 7687. The Private Link tunnel, already established, continues to forward traffic. Azure does not re-validate the PL configuration on gateway updates.
 
-This was validated on 2026-03-20. See [PHASED_DEPLOY_EXPERIMENT.md](PHASED_DEPLOY_EXPERIMENT.md) for the full analysis and experiment log.
+This was validated on 2026-03-20.
 
 ## Prerequisites
 
@@ -169,7 +171,7 @@ Key properties:
 | `create-pe-rule` | Create private endpoint rule pointing to App Gateway |
 | `approve` | Approve pending private endpoint connections |
 | `attach-ncc` | Attach NCC to a Databricks workspace |
-| `setup-secrets` | Store Neo4j credentials in Databricks secrets |
+| `setup-secrets` | Store Neo4j credentials and domain in Databricks secrets |
 | `ncc-status` | Show NCC, PE rule state, and workspace attachment |
 | `detach-ncc` | Detach and delete NCC from Databricks |
 
@@ -205,13 +207,26 @@ app-gateway-pl/
   manage_ip_allowlist.py    # Aura BC IP allowlist management
   azure-resources.json      # Generated resource manifest (gitignored)
   appgw_private_link_test.ipynb  # Databricks notebook for Private Link validation
-  PHASED_DEPLOY_EXPERIMENT.md  # Architecture analysis and experiment log
   py-test/
     infra/main.bicep        # Test VM + Private Endpoint Bicep
     deploy_test_vm.py       # VM deployment orchestrator
     conftest.py             # pytest fixtures
     test_appgw_connectivity.py  # End-to-end connectivity tests
 ```
+
+## References
+
+| Topic | URL |
+|-------|-----|
+| App Gateway TCP/TLS proxy overview | https://learn.microsoft.com/azure/application-gateway/tcp-tls-proxy-overview |
+| App Gateway Private Link | https://learn.microsoft.com/azure/application-gateway/private-link |
+| App Gateway Private Link config | https://learn.microsoft.com/azure/application-gateway/private-link-configure |
+| App Gateway FAQ (L4 + L7 same frontend IP) | https://learn.microsoft.com/en-us/azure/application-gateway/application-gateway-faq |
+| MS Q&A: PE creation steps and group-id | https://learn.microsoft.com/en-us/answers/questions/2099854/azure-cli-cannot-create-private-endpoint-for-appli |
+| Databricks: Private connectivity to VNet resources | https://learn.microsoft.com/en-us/azure/databricks/security/network/serverless-network-security/pl-to-internal-network |
+| Databricks: Manage PE rules (supported resources) | https://learn.microsoft.com/en-us/azure/databricks/security/network/serverless-network-security/manage-private-endpoint-rules |
+| Databricks: Serverless private link | https://learn.microsoft.com/en-us/azure/databricks/security/network/serverless-network-security/serverless-private-link |
+| Azure Private Link Service overview | https://learn.microsoft.com/azure/private-link/private-link-service-overview |
 
 ## Cleanup
 
