@@ -17,16 +17,6 @@ Two mechanisms make this work:
 
 See [`app-gateway-pl/README.md`](app-gateway-pl/README.md) for deployment instructions and [`app-gateway-pl/ARCHITECTURE.md`](app-gateway-pl/ARCHITECTURE.md) for the full technical explanation.
 
-### Connection Path as a Graph
-
-```cypher
-(:DatabricksServerless)-[:CONNECTS_VIA {protocol: "neo4j+s://"}]->
-(:DatabricksNCC)-[:ROUTES_THROUGH]->
-(:PrivateLink)-[:TERMINATES_AT]->
-(:ApplicationGateway {sku: "Standard_v2", mode: "L4_TCP_passthrough"})-[:FORWARDS_TO]->
-(:AuraBC)
-```
-
 ## Preserving the Neo4j Protocol
 
 A key goal of this architecture is preserving the full `neo4j+s://` routing protocol through the Private Link tunnel, not just establishing basic connectivity.
