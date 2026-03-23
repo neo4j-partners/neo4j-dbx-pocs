@@ -15,21 +15,17 @@ Two mechanisms make this work:
 
 - **NCC multi-domain private endpoint rules enable `neo4j+s://` with full routing protocol support.** The `neo4j+s://` protocol triggers routing table discovery, where the driver fetches cluster member hostnames and opens separate connections to each. These routing table hostnames are in a completely different domain from the connection FQDN. By listing all hostnames (connection FQDN plus routing table members) in a single NCC PE rule, Databricks routes every connection through the Private Link tunnel. This enables client-side routing with read/write splitting across cluster members.
 
-```
-Databricks Serverless (eastus)
-    |
-    |  NCC Private Endpoint (multi-domain PE rule)
-    v
-Private Link tunnel (Azure backbone)
-    |
-    v
-Application Gateway v2 (L4 TCP, port 7687, TLS passthrough)
-    |
-    v
-Neo4j Aura Business Critical
-```
-
 See [`app-gateway-pl/README.md`](app-gateway-pl/README.md) for deployment instructions and [`app-gateway-pl/ARCHITECTURE.md`](app-gateway-pl/ARCHITECTURE.md) for the full technical explanation.
+
+### Connection Path as a Graph
+
+```cypher
+(:DatabricksServerless)-[:CONNECTS_VIA {protocol: "neo4j+s://"}]->
+(:DatabricksNCC)-[:ROUTES_THROUGH]->
+(:PrivateLink)-[:TERMINATES_AT]->
+(:ApplicationGateway {sku: "Standard_v2", mode: "L4_TCP_passthrough"})-[:FORWARDS_TO]->
+(:AuraBC)
+```
 
 ## Preserving the Neo4j Protocol
 
