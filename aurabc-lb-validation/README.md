@@ -2,6 +2,26 @@
 
 Connects Databricks serverless compute to Neo4j Aura Business Critical over Azure Private Link using a load balancer and reverse proxy architecture. Validated end-to-end.
 
+
+## Getting started with uv
+
+This project uses [uv](https://docs.astral.sh/uv/) for dependency management. No need to manually create a virtual environment or run `pip install`.
+
+```bash
+# Install uv (if you don't have it)
+brew install uv
+
+# Sync dependencies (creates .venv automatically)
+uv sync
+
+# Run any script
+uv run python deploy.py status
+```
+
+`uv sync` reads `pyproject.toml` and `uv.lock`, creates a `.venv` in the project directory, and installs all dependencies. `uv run` executes commands inside that environment — no `source .venv/bin/activate` needed.
+
+
+
 ## Architecture
 
 Databricks serverless cannot create outbound private endpoints directly to external services. This project works around that limitation by deploying an Azure Private Link Service backed by an internal load balancer and an HAProxy VM that forwards Bolt traffic to Aura BC over the public internet via a NAT Gateway with a static IP.
